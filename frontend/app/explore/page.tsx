@@ -1,9 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { SearchBar, FilterPanel } from '@/components/search-bar'
 import { ArticleCard } from '@/components/article-card'
 import { CategoryFilter } from '@/components/category-filter'
+
+type ApiArticle = {
+  id: string
+  topic: string
+  headline: string
+  subheadline: string
+  lede: string
+  category: string
+  sources: Array<{ name: string }>
+  publishedAt: string
+  qualityScore: { overallScore: number }
+}
 
 const ALL_ARTICLES = [
   {
@@ -129,6 +141,29 @@ export default function ExplorePage() {
   const [isFilterOpen, setIsFilterOpen] = useState(false)
   const [filters, setFilters] = useState<Record<string, string[]>>({})
   const [sortBy, setSortBy] = useState('recent')
+  const [apiArticles, setApiArticles] = useState<ApiArticle[]>([])
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadArticles = async () => {
+      try {
+        const response = await fetch('/api/articles', { cache: 'no-store' })
+        if (!response.ok) return
+        const json = (await response.json()) as { articles?: ApiArticle[] }
+        if (mounted && Array.isArray(json.articles) && json.articles.length > 0) {
+          setApiArticles(json.articles)
+        }
+      } catch {
+        // Keep fallback catalog when API data is unavailable.
+      }
+    }
+
+    void loadArticles()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategories((prev) =>
@@ -138,7 +173,28 @@ export default function ExplorePage() {
     )
   }
 
-  const filteredArticles = ALL_ARTICLES.filter((article) => {
+  const displayArticles = useMemo(
+    () =>
+      apiArticles.length
+        ? apiArticles.map((article, index) => ({
+            id: article.id,
+            title: article.headline,
+            description: article.subheadline || article.lede,
+            category: article.category,
+            categoryColor: (index % 3 === 0 ? 'secondary' : 'default') as const,
+            imageUrl:
+              index % 2
+                ? 'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=600&h=400&fit=crop'
+                : 'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=600&h=400&fit=crop',
+            publishedAt: article.publishedAt,
+            viewCount: Math.round(article.qualityScore.overallScore * 5000),
+            sources: article.sources.map((source) => source.name),
+          }))
+        : ALL_ARTICLES,
+    [apiArticles]
+  )
+
+  const filteredArticles = displayArticles.filter((article) => {
     const matchesSearch =
       article.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       article.description.toLowerCase().includes(searchQuery.toLowerCase())

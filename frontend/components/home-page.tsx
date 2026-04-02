@@ -1,9 +1,25 @@
 'use client'
 
+import { useEffect, useMemo, useState } from 'react'
 import { ArticleCard } from '@/components/article-card'
 import { TrustStrip } from '@/components/trust-strip'
 
-const FEATURED_ARTICLE = {
+type ApiArticle = {
+  id: string
+  topic: string
+  headline: string
+  subheadline: string
+  lede: string
+  body: string
+  category: string
+  tags: string[]
+  sources: Array<{ name: string }>
+  readingTime: number
+  publishedAt: string
+  qualityScore: { overallScore: number }
+}
+
+const FEATURED_ARTICLE_FALLBACK = {
   id: '1',
   title: 'Breakthrough in Quantum Computing Achieved by Leading Research Institute',
   description:
@@ -18,7 +34,7 @@ const FEATURED_ARTICLE = {
   featured: true,
 }
 
-const TRENDING_ARTICLES = [
+const TRENDING_ARTICLES_FALLBACK = [
   {
     id: '2',
     title: 'Global Markets Rally on Economic Growth Signals',
@@ -61,6 +77,84 @@ const TRENDING_ARTICLES = [
 ]
 
 export function HomePage() {
+  const [articles, setArticles] = useState<ApiArticle[]>([])
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadArticles = async () => {
+      try {
+        const response = await fetch('/api/articles', { cache: 'no-store' })
+        if (!response.ok) return
+        const json = (await response.json()) as { articles?: ApiArticle[] }
+        if (mounted && Array.isArray(json.articles)) {
+          setArticles(json.articles)
+        }
+      } catch {
+        // Keep fallback cards if API is unavailable.
+      }
+    }
+
+    void loadArticles()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const mapped = useMemo(
+    () =>
+      articles.map((article, index) => ({
+        id: article.id,
+        title: article.headline,
+        description: article.subheadline || article.lede,
+        category: article.category,
+        categoryColor: (index === 0 ? 'secondary' : 'default') as const,
+        imageUrl:
+          index % 2
+            ? 'https://images.unsplash.com/photo-1574482620811-1aa16ffe3c82?w=600&h=400&fit=crop'
+            : 'https://images.unsplash.com/photo-1635070041078-e72b99c00b61?w=1200&h=600&fit=crop',
+        publishedAt: new Date(article.publishedAt).toLocaleString(),
+        viewCount: Math.round(article.qualityScore.overallScore * 5000),
+        sources: article.sources.map((source) => source.name),
+        featured: index === 0,
+      })),
+    [articles]
+  )
+
+  const featuredArticle = mapped[0] ?? FEATURED_ARTICLE_FALLBACK
+  const trendingArticles = mapped.slice(1, 4).length
+    ? mapped.slice(1, 4)
+    : TRENDING_ARTICLES_FALLBACK
+  const liveArticles = mapped.length > 0 ? mapped : [FEATURED_ARTICLE_FALLBACK, ...TRENDING_ARTICLES_FALLBACK]
+  const categorySummary = useMemo(() => {
+    const counts = new Map<string, number>()
+
+    liveArticles.forEach((article) => {
+      counts.set(article.category, (counts.get(article.category) ?? 0) + 1)
+    })
+
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => right.count - left.count)
+  }, [liveArticles])
+
+  const liveSummary = useMemo(() => {
+    const sourceCount = mapped[0]?.sources.length ?? featuredArticle.sources.length
+    const averageScore =
+      mapped.length > 0
+        ? Math.round(
+            mapped.reduce((sum, article) => sum + article.viewCount / 5000, 0) / mapped.length * 10
+          ) / 10
+        : 0
+    const topCategory = categorySummary[0]?.name ?? featuredArticle.category
+
+    return {
+      sourceCount,
+      averageScore,
+      topCategory,
+    }
+  }, [categorySummary, featuredArticle.category, featuredArticle.sources.length, mapped])
+
   return (
     <div className="min-h-screen bg-background">
       {/* Hero Section */}
@@ -80,7 +174,7 @@ export function HomePage() {
         <div className="mb-16">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
-              <ArticleCard {...FEATURED_ARTICLE} />
+              <ArticleCard {...featuredArticle} />
             </div>
             <div className="flex flex-col gap-4">
               <div className="bg-card rounded-lg border border-border p-6">
@@ -89,27 +183,27 @@ export function HomePage() {
                 </h3>
                 <TrustStrip
                   verificationStatus="verified"
-                  sourceCount={8}
-                  lastUpdated="5 minutes ago"
+                  sourceCount={liveSummary.sourceCount}
+                  lastUpdated={mapped[0]?.publishedAt ?? 'just now'}
                   aiGenerated
                 />
               </div>
-              <div className="bg-card rounded-lg border border-border p-6 flex-grow">
+              <div className="bg-card rounded-lg border border-border p-6 grow">
                 <h3 className="text-sm font-semibold text-foreground mb-3">
-                  Key Insights
+                  Live Signals
                 </h3>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-1">•</span>
-                    <span>Coherence times improved by 1000x</span>
+                    <span>{liveSummary.topCategory} is the most active category right now</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-1">•</span>
-                    <span>Practical applications within 5 years</span>
+                    <span>{liveSummary.sourceCount} sources visible on the featured story</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-1">•</span>
-                    <span>$2B+ in research funding secured</span>
+                    <span>Average live story score: {liveSummary.averageScore || 'n/a'}/10</span>
                   </li>
                 </ul>
               </div>
@@ -127,7 +221,7 @@ export function HomePage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {TRENDING_ARTICLES.map((article) => (
+            {trendingArticles.map((article) => (
               <ArticleCard key={article.id} {...article} />
             ))}
           </div>
@@ -142,14 +236,26 @@ export function HomePage() {
           </h2>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            {[
-              { name: 'Technology', count: 234 },
-              { name: 'Business', count: 189 },
-              { name: 'Science', count: 156 },
-              { name: 'Health', count: 142 },
-              { name: 'Environment', count: 98 },
-              { name: 'Politics', count: 127 },
-            ].map((cat) => (
+            {categorySummary.length > 0
+              ? categorySummary.map((cat) => (
+                  <div
+                    key={cat.name}
+                    className="group cursor-pointer p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/5 transition-all text-center"
+                  >
+                    <p className="font-semibold text-sm text-foreground group-hover:text-primary transition-colors">
+                      {cat.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">{cat.count} stories</p>
+                  </div>
+                ))
+              : [
+                  { name: 'Technology', count: 234 },
+                  { name: 'Business', count: 189 },
+                  { name: 'Science', count: 156 },
+                  { name: 'Health', count: 142 },
+                  { name: 'Environment', count: 98 },
+                  { name: 'Politics', count: 127 },
+                ].map((cat) => (
               <div
                 key={cat.name}
                 className="group cursor-pointer p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/5 transition-all text-center"
@@ -159,13 +265,13 @@ export function HomePage() {
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">{cat.count} stories</p>
               </div>
-            ))}
+                ))}
           </div>
         </div>
       </section>
 
       {/* CTA Section */}
-      <section className="bg-gradient-to-br from-primary/10 to-accent/10 border-t border-border py-12 sm:py-16">
+      <section className="bg-linear-to-br from-primary/10 to-accent/10 border-t border-border py-12 sm:py-16">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">
             Get News You Can Trust

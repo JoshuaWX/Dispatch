@@ -55,7 +55,7 @@ export default function RootLayout({
       <body className="font-sans antialiased flex flex-col min-h-screen bg-background text-foreground">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem enableColorScheme>
           <Header />
-          <main className="flex-grow">
+          <main className="grow">
             {children}
           </main>
           <Footer />

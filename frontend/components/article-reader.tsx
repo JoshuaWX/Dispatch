@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { TrustStrip } from '@/components/trust-strip'
 import { SourcePanel } from '@/components/source-panel'
 import { ArrowLeft, Share2, Bookmark, MessageCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 export interface ArticleReaderProps {
   articleId: string
@@ -98,9 +98,86 @@ const ARTICLE_DATA = {
   ],
 }
 
+type ApiArticle = {
+  id: string
+  topic: string
+  headline: string
+  subheadline: string
+  lede: string
+  body: string
+  category: string
+  sources: Array<{
+    id: string
+    name: string
+    reliability: 'high' | 'medium' | 'low'
+    excerpt: string
+    url: string
+    publishedAt: string
+  }>
+  readingTime: number
+  publishedAt: string
+  verificationStatus: 'verified' | 'pending' | 'unverified'
+  qualityScore?: {
+    sourceDiversity: number
+    sensationalism: number
+    factualConfidence: number
+    ledeStrength: number
+    overallScore: number
+  }
+}
+
+function toHtmlParagraphs(text: string) {
+  return text
+    .split(/\n\n+/)
+    .map((paragraph) => `<p>${paragraph.trim()}</p>`)
+    .join('')
+}
+
 export function ArticleReader({ articleId }: ArticleReaderProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
-  const article = ARTICLE_DATA // In a real app, fetch based on articleId
+  const [article, setArticle] = useState(ARTICLE_DATA)
+
+  const evidenceSources = article.sources.slice(0, 3)
+  const overallScore = article.qualityScore?.overallScore ?? null
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadArticle = async () => {
+      try {
+        const response = await fetch(`/api/articles/${articleId}`, {
+          cache: 'no-store',
+        })
+
+        if (!response.ok) return
+
+        const json = (await response.json()) as ApiArticle
+        if (!mounted) return
+
+        setArticle({
+          ...ARTICLE_DATA,
+          id: json.id,
+          title: json.headline,
+          subtitle: json.subheadline || json.lede,
+          category: json.category,
+          publishedAt: json.publishedAt,
+          readTime: json.readingTime,
+          verificationStatus: json.verificationStatus,
+          sourceCount: json.sources.length,
+          lastUpdated: 'just now',
+          content: toHtmlParagraphs(json.body),
+          sources: json.sources,
+        })
+      } catch {
+        // Keep fallback story if API is unavailable.
+      }
+    }
+
+    void loadArticle()
+    return () => {
+      mounted = false
+    }
+  }, [articleId])
 
   return (
     <article className="min-h-screen bg-background">
@@ -176,6 +253,39 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
                     <MessageCircle className="w-4 h-4" />
                   </Button>
                 </div>
+              </div>
+            </div>
+
+            {/* Evidence Snapshot */}
+            <div className="mb-8 rounded-lg border border-border bg-card p-5">
+              <div className="flex items-center justify-between gap-4 mb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">Evidence Snapshot</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Fast traceability from the article to the sources behind it.
+                  </p>
+                </div>
+                {overallScore !== null && (
+                  <Badge variant="outline" className="shrink-0">
+                    Score {overallScore}/10
+                  </Badge>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                {evidenceSources.map((source) => (
+                  <div key={source.id} className="rounded-md border border-border/70 p-3">
+                    <div className="flex items-center justify-between gap-3 mb-1">
+                      <p className="text-sm font-medium text-foreground">{source.name}</p>
+                      <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                        {source.reliability}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {source.excerpt}
+                    </p>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -277,7 +387,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
               </div>
 
               {/* Newsletter CTA */}
-              <div className="bg-gradient-to-br from-primary/10 to-accent/10 rounded-lg border border-border p-6">
+              <div className="bg-linear-to-br from-primary/10 to-accent/10 rounded-lg border border-border p-6">
                 <h3 className="text-sm font-semibold text-foreground mb-2">
                   Subscribe to Updates
                 </h3>
