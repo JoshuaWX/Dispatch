@@ -16,6 +16,7 @@ const FALLBACK_TOPICS = [
 
 type CachedTopics = {
   topics: string[]
+  imageByTopic: Record<string, string>
   fetchedAt: number
 }
 
@@ -58,7 +59,17 @@ export async function getTopics(): Promise<string[]> {
       results?: Array<{
         title?: string
         category?: string[] | string
+        image_url?: string
       }>
+    }
+
+    const imageByTopic: Record<string, string> = {}
+    for (const item of payload.results ?? []) {
+      const topic = normalizeTopic(item.title ?? '')
+      const imageUrl = item.image_url?.trim()
+      if (topic && imageUrl) {
+        imageByTopic[topic.toLowerCase()] = imageUrl
+      }
     }
 
     const topics = Array.from(
@@ -75,6 +86,7 @@ export async function getTopics(): Promise<string[]> {
 
     globalForNewsData.__dispatchNewsDataCache = {
       topics,
+      imageByTopic,
       fetchedAt: now,
     }
 
@@ -82,4 +94,20 @@ export async function getTopics(): Promise<string[]> {
   } catch {
     return [...FALLBACK_TOPICS]
   }
+}
+
+export async function getTopicImageHint(topic: string): Promise<string | null> {
+  const normalized = normalizeTopic(topic).toLowerCase()
+  if (!normalized) {
+    return null
+  }
+
+  const now = Date.now()
+  const cache = globalForNewsData.__dispatchNewsDataCache
+
+  if (!cache || now - cache.fetchedAt >= ONE_HOUR_MS) {
+    await getTopics()
+  }
+
+  return globalForNewsData.__dispatchNewsDataCache?.imageByTopic?.[normalized] ?? null
 }

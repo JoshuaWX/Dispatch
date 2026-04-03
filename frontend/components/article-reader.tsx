@@ -105,6 +105,8 @@ type ApiArticle = {
   subheadline: string
   lede: string
   body: string
+  imageUrl?: string
+  imageCredit?: string
   category: string
   sources: Array<{
     id: string
@@ -161,12 +163,15 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
           subtitle: json.subheadline || json.lede,
           category: json.category,
           publishedAt: json.publishedAt,
+          imageUrl: json.imageUrl ?? ARTICLE_DATA.imageUrl,
+          imageCredit: json.imageCredit ?? ARTICLE_DATA.imageCredit,
           readTime: json.readingTime,
           verificationStatus: json.verificationStatus,
           sourceCount: json.sources.length,
           lastUpdated: 'just now',
           content: toHtmlParagraphs(json.body),
           sources: json.sources,
+          qualityScore: json.qualityScore,
         })
       } catch {
         // Keep fallback story if API is unavailable.

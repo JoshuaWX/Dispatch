@@ -16,6 +16,9 @@ const createSeedArticles = (): PublishedArticle[] => [
       'Researchers say a new approach could dramatically reduce the fragility that has long limited quantum systems.',
     lede:
       'Researchers at a leading lab say they have cut a major source of quantum computing error, a development that could shorten the path toward usable machines.',
+    imageUrl:
+      'https://images.unsplash.com/photo-1635070041078-e72b99c00b61?w=1600&h=900&fit=crop',
+    imageCredit: 'Unsplash',
     body:
       'A new research milestone is drawing attention across the quantum computing field as scientists report progress on the long-running challenge of error correction. The work, described by researchers as an important step rather than a finished solution, focuses on stabilizing qubits long enough for practical computation.\n\nThe key advance is not a product launch or a sudden commercial breakthrough. It is a technical improvement that strengthens the case for continued investment in the field, where companies and universities have spent years trying to overcome instability and noise. The researchers say their method improves coherence and makes it easier to preserve quantum states long enough to complete meaningful calculations.\n\nIndependent experts are treating the result as notable because quantum computing progress is usually incremental and difficult to verify outside specialist circles. Several source reports emphasize that the result should be understood as a research step, not proof that large-scale quantum advantage is already here.\n\nStill, the implications are significant. If further replication confirms the findings, the work could influence roadmaps for cryptography, materials discovery, and scientific simulation. For now, the core story is one of technical progress, measured optimism, and a field that remains under intense scrutiny.',
     category: 'Science',
@@ -70,6 +73,9 @@ const createSeedArticles = (): PublishedArticle[] => [
       'Officials describe the latest talks as fragile but active, with pressure rising on all sides to show movement.',
     lede:
       'Negotiators returned to the table on Monday as diplomats sought to narrow the remaining gaps in ceasefire talks that have drawn global attention.',
+    imageUrl:
+      'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1600&h=900&fit=crop',
+    imageCredit: 'Unsplash',
     body:
       'The latest round of diplomatic engagement underscores how difficult it remains to secure a durable agreement. Officials familiar with the talks say the discussions are moving, but slowly, and that several key issues are still unresolved.\n\nThe most immediate questions concern implementation, sequencing, and verification. Those details matter because any agreement will depend not only on political will but also on whether the parties can accept mechanisms that reduce the chance of breakdown.\n\nSources close to the negotiations describe the atmosphere as cautious. Each side is under pressure from domestic audiences, humanitarian organizations, and international partners to make concessions without appearing to give away leverage. That tension has repeatedly complicated previous attempts to reach a durable deal.\n\nFor observers, the significance lies less in a headline breakthrough than in the fact that talks continue at all. The diplomatic process remains fragile, but the persistence of negotiations suggests that the parties still see a path, however narrow, toward an eventual agreement.',
     category: 'World',
@@ -115,6 +121,9 @@ const createSeedArticles = (): PublishedArticle[] => [
       'Investors are recalibrating expectations after new commentary hinted at a more cautious policy path.',
     lede:
       'Global markets moved lower in early trading after officials signaled that policy may remain restrictive longer than investors had hoped.',
+    imageUrl:
+      'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=1600&h=900&fit=crop',
+    imageCredit: 'Unsplash',
     body:
       'Market participants spent much of the session parsing every phrase from central bank officials, with rate expectations shifting in response to the latest guidance. The move was not dramatic, but it was broad enough to affect equities, bonds, and currency markets at the same time.\n\nAnalysts said the reaction reflected a familiar pattern: traders often price in faster easing than policymakers are willing to endorse. When the gap widens, markets tend to pull back, particularly in sectors that are sensitive to borrowing costs.\n\nThe core question is whether inflation progress remains durable enough to allow a more flexible stance later in the year. Until then, investors appear to be adjusting to a more disciplined interpretation of the policy outlook.\n\nThe story is less about panic than recalibration. Markets are learning, again, that official language matters because it can alter expectations long before any rate decision is made.',
     category: 'Business',

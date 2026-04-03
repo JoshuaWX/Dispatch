@@ -92,6 +92,8 @@ export interface PublishedArticle {
   subheadline: string
   lede: string
   body: string
+  imageUrl?: string
+  imageCredit?: string
   category: ArticleCategory
   tags: string[]
   sources: ArticleSource[]

@@ -28,7 +28,8 @@ import {
   QA_PROMPT,
   RESEARCH_BRIEF_PROMPT,
 } from '@/lib/prompts'
-import { getTopics } from '@/lib/newsdata'
+import { getTopicImageHint, getTopics } from '@/lib/newsdata'
+import { resolveStoryImage } from '@/lib/story-image'
 
 const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
 
@@ -506,13 +507,15 @@ async function callAnthropic(system: string, payload: object) {
   }
 }
 
-function createArticleRecord(
+async function createArticleRecord(
   topic: string,
   research: ResearchBrief,
   draft: ArticleDraft,
   score: QualityScore
-): PublishedArticle {
+): Promise<PublishedArticle> {
   const body = draft.body.trim()
+  const hintedImageUrl = await getTopicImageHint(topic)
+  const visual = await resolveStoryImage(topic, draft.category, hintedImageUrl)
 
   return {
     id: randomUUID(),
@@ -521,6 +524,8 @@ function createArticleRecord(
     subheadline: draft.subheadline,
     lede: draft.lede,
     body,
+    imageUrl: visual.imageUrl,
+    imageCredit: visual.imageCredit,
     category: draft.category,
     tags: draft.tags,
     sources: buildSources(research),
@@ -671,7 +676,7 @@ export async function runPipeline(input: GenerateStoryInput) {
       }
     }
 
-    const article = createArticleRecord(selectedTopic, research, draft, qualityScore)
+    const article = await createArticleRecord(selectedTopic, research, draft, qualityScore)
     upsertArticle(article)
 
     setProgress('publish', 100, 'Published to newsroom feed')
