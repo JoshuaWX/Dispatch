@@ -42,7 +42,7 @@ export async function getTopics(): Promise<string[]> {
   }
 
   try {
-    const url = new URL(`${NEWSDATA_BASE_URL}/latest-news`)
+    const url = new URL(`${NEWSDATA_BASE_URL}/news`)
     url.searchParams.set('apikey', apiKey)
     url.searchParams.set('language', 'en')
     url.searchParams.set('category', 'world,technology,business,science')

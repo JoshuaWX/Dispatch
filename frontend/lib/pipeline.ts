@@ -31,7 +31,9 @@ import {
 import { getTopicImageHint, getTopics } from '@/lib/newsdata'
 import { resolveStoryImage } from '@/lib/story-image'
 
-const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
+const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
+const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
+const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
 
 function extractJsonCandidate(raw: string) {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -481,7 +483,7 @@ async function callAnthropic(system: string, payload: object) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: DEFAULT_MODEL,
+      model: DEFAULT_ANTHROPIC_MODEL,
       max_tokens: 1800,
       system,
       messages: [
@@ -505,6 +507,56 @@ async function callAnthropic(system: string, payload: object) {
   } catch {
     return null
   }
+}
+
+async function callGroq(system: string, payload: object) {
+  const apiKey = process.env.GROQ_API_KEY ?? ''
+  if (!apiKey) {
+    return null
+  }
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: DEFAULT_GROQ_MODEL,
+      temperature: 0.2,
+      max_tokens: 1800,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: JSON.stringify(payload) },
+      ],
+    }),
+  })
+
+  if (!response.ok) {
+    console.warn(`Groq request failed with ${response.status}; falling back to local generation`)
+    return null
+  }
+
+  try {
+    const json = await response.json()
+    const text = json?.choices?.[0]?.message?.content
+    return typeof text === 'string' && text.trim() ? text : null
+  } catch {
+    return null
+  }
+}
+
+async function callModel(system: string, payload: object) {
+  if (AI_PROVIDER === 'anthropic') {
+    return callAnthropic(system, payload)
+  }
+
+  if (AI_PROVIDER === 'groq') {
+    return callGroq(system, payload)
+  }
+
+  // Auto mode: prefer Groq if available, then Anthropic.
+  return (await callGroq(system, payload)) ?? callAnthropic(system, payload)
 }
 
 async function createArticleRecord(
@@ -566,7 +618,7 @@ export function getPipelineStatus() {
 export async function researchTopic(topic: string) {
   const fallbackResearch = buildResearchBrief(topic)
 
-  const maybeAnthropic = await callAnthropic(RESEARCH_BRIEF_PROMPT, {
+  const modelOutput = await callModel(RESEARCH_BRIEF_PROMPT, {
     topic,
     categoryHint: fallbackResearch.category,
     sourceHints: fallbackResearch.sources,
@@ -574,7 +626,7 @@ export async function researchTopic(topic: string) {
 
   const parsedResearch = normalizeResearchBrief(
     topic,
-    parseJsonObject<ResearchBrief>(maybeAnthropic)
+    parseJsonObject<ResearchBrief>(modelOutput)
   )
 
   if (parsedResearch && parsedResearch.sources.length >= 2 && parsedResearch.keyFacts.length >= 2) {
@@ -586,13 +638,13 @@ export async function researchTopic(topic: string) {
 
 async function generateDraftFromResearch(research: ResearchBrief, flaggedClaims: string[] = []) {
   const fallbackDraft = buildArticleDraft(research)
-  const maybeAnthropic = await callAnthropic(ARTICLE_WRITER_PROMPT, {
+  const modelOutput = await callModel(ARTICLE_WRITER_PROMPT, {
     research,
     flaggedClaimsToAvoid: flaggedClaims,
   })
 
   const parsedDraft = normalizeDraft(
-    parseJsonObject<ArticleDraft>(maybeAnthropic),
+    parseJsonObject<ArticleDraft>(modelOutput),
     research,
     fallbackDraft
   )
@@ -602,12 +654,12 @@ async function generateDraftFromResearch(research: ResearchBrief, flaggedClaims:
 
 async function evaluateQuality(research: ResearchBrief, draft: ArticleDraft): Promise<QualityScore> {
   const fallbackScore = scoreArticle(research, draft)
-  const maybeAnthropic = await callAnthropic(QUALITY_GATE_PROMPT, {
+  const modelOutput = await callModel(QUALITY_GATE_PROMPT, {
     research,
     article: draft,
   })
 
-  const parsedScore = normalizeQualityScore(parseJsonObject<QualityScore>(maybeAnthropic))
+  const parsedScore = normalizeQualityScore(parseJsonObject<QualityScore>(modelOutput))
   return parsedScore ?? fallbackScore
 }
 
