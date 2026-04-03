@@ -34,6 +34,14 @@ import { resolveStoryImage } from '@/lib/story-image'
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
 const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
+const AUTO_GENERATION_INTERVAL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.AUTO_GENERATION_INTERVAL_MS ?? '', 10) || 15 * 60 * 1000
+)
+
+const globalForPipeline = globalThis as typeof globalThis & {
+  __dispatchAutoRunPromise?: Promise<void>
+}
 
 function extractJsonCandidate(raw: string) {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
@@ -604,7 +612,9 @@ export async function getTrendDigest() {
 }
 
 export function getPublishedArticles() {
-  return listArticles()
+  const articles = listArticles()
+  maybeTriggerAutonomousRun(articles.length)
+  return articles
 }
 
 export function getPublishedArticle(articleId: string) {
@@ -612,7 +622,54 @@ export function getPublishedArticle(articleId: string) {
 }
 
 export function getPipelineStatus() {
-  return getPipelineSnapshot()
+  const snapshot = getPipelineSnapshot()
+  maybeTriggerAutonomousRun(listArticles().length, snapshot)
+  return snapshot
+}
+
+function chooseRandomTopic(topics: string[]) {
+  if (topics.length === 0) {
+    return null
+  }
+
+  const index = Math.floor(Math.random() * topics.length)
+  return topics[index] ?? null
+}
+
+function shouldAutonomousRun(articleCount: number) {
+  const snapshot = getPipelineSnapshot()
+  if (snapshot.status === 'running') {
+    return false
+  }
+
+  if (articleCount === 0) {
+    return true
+  }
+
+  const lastActivity = snapshot.lastSuccessAt ?? snapshot.lastRunAt
+  if (!lastActivity) {
+    return true
+  }
+
+  const elapsed = Date.now() - new Date(lastActivity).getTime()
+  return elapsed >= AUTO_GENERATION_INTERVAL_MS
+}
+
+function maybeTriggerAutonomousRun(articleCount: number, snapshot = getPipelineSnapshot()) {
+  if (globalForPipeline.__dispatchAutoRunPromise || snapshot.status === 'running') {
+    return
+  }
+
+  if (!shouldAutonomousRun(articleCount)) {
+    return
+  }
+
+  globalForPipeline.__dispatchAutoRunPromise = runPipeline({})
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      globalForPipeline.__dispatchAutoRunPromise = undefined
+    })
 }
 
 export async function researchTopic(topic: string) {
@@ -673,7 +730,7 @@ export async function generateArticleDraft(topic: string) {
 
 export async function runPipeline(input: GenerateStoryInput) {
   const topics = await getTopics()
-  const selectedTopic = input.topic?.trim() || topics[0]
+  const selectedTopic = input.topic?.trim() || chooseRandomTopic(topics)
 
   if (!selectedTopic) {
     throw new Error('No topic available. Provide a topic or configure a trends source.')

@@ -348,7 +348,7 @@ export default function PipelinePage() {
             <div className="bg-card rounded-lg border border-border p-8 text-center">
               <h3 className="text-xl font-semibold text-foreground mb-2">No pipeline events yet</h3>
               <p className="text-muted-foreground">
-                Run the pipeline to generate and publish AI stories.
+                Autonomous generation is active; you can also trigger a run manually.
               </p>
             </div>
           )}

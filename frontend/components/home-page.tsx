@@ -150,7 +150,7 @@ export function HomePage() {
             <div className="bg-card rounded-lg border border-border p-8 text-center">
               <h3 className="text-xl font-semibold text-foreground mb-2">No generated stories yet</h3>
               <p className="text-muted-foreground">
-                Run the pipeline to publish the first AI-generated article.
+                Autonomous generation is warming up. Your first AI story should appear shortly.
               </p>
             </div>
           )}
