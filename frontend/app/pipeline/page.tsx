@@ -221,6 +221,15 @@ export default function PipelinePage() {
     ]
   )
 
+  const activeStoryRuns = useMemo(() => {
+    const titles = new Set(
+      (pipelineState?.recentEvents ?? [])
+        .map((event) => event.articleTitle.trim())
+        .filter(Boolean)
+    )
+    return titles.size
+  }, [pipelineState])
+
   useEffect(() => {
     void loadArticles()
   }, [])
@@ -318,7 +327,7 @@ export default function PipelinePage() {
             stats={[
               {
                 label: 'Stories in Pipeline',
-                value: stories.length,
+                value: activeStoryRuns,
                 change: 12,
               },
               {
