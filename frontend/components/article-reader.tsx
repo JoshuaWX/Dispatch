@@ -139,8 +139,13 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
   const [article, setArticle] = useState(ARTICLE_DATA)
 
+  const MIN_IMAGE_CONFIDENCE = 7
   const evidenceSources = article.sources.slice(0, 3)
   const overallScore = article.qualityScore?.overallScore ?? null
+  const showTrustedImage =
+    Boolean(article.imageUrl) &&
+    article.verificationStatus === 'verified' &&
+    (overallScore === null || overallScore >= MIN_IMAGE_CONFIDENCE)
 
   useEffect(() => {
     let mounted = true
@@ -295,7 +300,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
             </div>
 
             {/* Featured Image */}
-            {article.imageUrl && (
+            {showTrustedImage && article.imageUrl && (
               <div className="mb-8 rounded-lg overflow-hidden">
                 <div className="relative h-96 sm:h-full">
                   <Image

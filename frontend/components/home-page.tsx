@@ -20,6 +20,8 @@ type ApiArticle = {
   qualityScore: { overallScore: number }
 }
 
+const MIN_IMAGE_CONFIDENCE = 7
+
 const FEATURED_ARTICLE_FALLBACK = {
   id: '1',
   title: 'Breakthrough in Quantum Computing Achieved by Leading Research Institute',
@@ -111,10 +113,7 @@ export function HomePage() {
         category: article.category,
         categoryColor: (index === 0 ? 'secondary' : 'default') as const,
         imageUrl:
-          article.imageUrl ??
-          (index % 2
-            ? 'https://images.unsplash.com/photo-1574482620811-1aa16ffe3c82?w=600&h=400&fit=crop'
-            : 'https://images.unsplash.com/photo-1635070041078-e72b99c00b61?w=1200&h=600&fit=crop'),
+          article.qualityScore.overallScore >= MIN_IMAGE_CONFIDENCE ? article.imageUrl : undefined,
         publishedAt: new Date(article.publishedAt).toLocaleString(),
         viewCount: Math.round(article.qualityScore.overallScore * 5000),
         sources: article.sources.map((source) => source.name),

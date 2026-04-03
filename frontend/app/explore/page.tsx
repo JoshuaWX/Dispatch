@@ -11,11 +11,14 @@ type ApiArticle = {
   headline: string
   subheadline: string
   lede: string
+  imageUrl?: string
   category: string
   sources: Array<{ name: string }>
   publishedAt: string
   qualityScore: { overallScore: number }
 }
+
+const MIN_IMAGE_CONFIDENCE = 7
 
 const ALL_ARTICLES = [
   {
@@ -183,9 +186,9 @@ export default function ExplorePage() {
             category: article.category,
             categoryColor: (index % 3 === 0 ? 'secondary' : 'default') as const,
             imageUrl:
-              index % 2
-                ? 'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=600&h=400&fit=crop'
-                : 'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=600&h=400&fit=crop',
+              article.qualityScore.overallScore >= MIN_IMAGE_CONFIDENCE
+                ? article.imageUrl
+                : undefined,
             publishedAt: article.publishedAt,
             viewCount: Math.round(article.qualityScore.overallScore * 5000),
             sources: article.sources.map((source) => source.name),
