@@ -189,6 +189,15 @@ if (!globalForDispatch.__dispatchStore) {
 }
 
 const trimEvents = (events: PipelineEvent[]) => events.slice(-25)
+const DUPLICATE_WINDOW_MS = 12 * 60 * 60 * 1000
+
+function normalizeForCompare(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 export function listArticles() {
   return [...store.articles].sort(
@@ -206,6 +215,31 @@ export function upsertArticle(article: PublishedArticle) {
   if (index >= 0) {
     store.articles[index] = article
     return article
+  }
+
+  const topicKey = normalizeForCompare(article.topic)
+  const headlineKey = normalizeForCompare(article.headline)
+  const now = new Date(article.publishedAt).getTime()
+
+  const duplicateIndex = store.articles.findIndex((existing) => {
+    const existingTime = new Date(existing.publishedAt).getTime()
+    if (!Number.isFinite(existingTime) || now - existingTime > DUPLICATE_WINDOW_MS) {
+      return false
+    }
+
+    const sameTopic = normalizeForCompare(existing.topic) === topicKey
+    const sameHeadline = normalizeForCompare(existing.headline) === headlineKey
+    return sameTopic || sameHeadline
+  })
+
+  if (duplicateIndex >= 0) {
+    const existing = store.articles[duplicateIndex]
+    const merged = {
+      ...article,
+      id: existing.id,
+    }
+    store.articles[duplicateIndex] = merged
+    return merged
   }
 
   store.articles.unshift(article)
