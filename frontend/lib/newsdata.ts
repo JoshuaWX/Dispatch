@@ -1,19 +1,6 @@
 const NEWSDATA_BASE_URL = 'https://newsdata.io/api/1'
 const ONE_HOUR_MS = 60 * 60 * 1000
 
-const FALLBACK_TOPICS = [
-  'AI regulation',
-  'climate summit',
-  'global markets',
-  'tech layoffs',
-  'space exploration',
-  'cybersecurity breach',
-  'election updates',
-  'energy transition',
-  'healthcare innovation',
-  'geopolitical tensions',
-]
-
 type CachedTopics = {
   topics: string[]
   imageByTopic: Record<string, string>
@@ -38,7 +25,7 @@ export async function getTopics(): Promise<string[]> {
 
   const apiKey = process.env.NEWSDATA_API_KEY?.trim()
   if (!apiKey) {
-    return [...FALLBACK_TOPICS]
+    return []
   }
 
   try {
@@ -92,7 +79,7 @@ export async function getTopics(): Promise<string[]> {
 
     return topics
   } catch {
-    return [...FALLBACK_TOPICS]
+    return []
   }
 }
 

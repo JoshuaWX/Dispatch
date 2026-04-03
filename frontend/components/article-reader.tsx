@@ -13,89 +13,36 @@ export interface ArticleReaderProps {
   articleId: string
 }
 
-const ARTICLE_DATA = {
-  id: '1',
-  title: 'Breakthrough in Quantum Computing Achieved by Leading Research Institute',
-  subtitle:
-    'Scientists announce a major advancement in quantum error correction, bringing practical quantum computing closer to reality.',
-  author: 'Dr. Elena Rodriguez',
-  category: 'Technology',
-  publishedAt: '2024-01-15T10:30:00Z',
-  imageUrl:
-    'https://images.unsplash.com/photo-1635070041078-e72b99c00b61?w=1600&h=800&fit=crop',
-  imageCredit: 'MIT Research Institute',
-  readTime: 8,
-  verificationStatus: 'verified' as const,
-  sourceCount: 12,
-  lastUpdated: '30 minutes ago',
-  aiGenerated: true,
-  content: `
-    <p>In a groundbreaking development that could accelerate the practical deployment of quantum computers, researchers at the MIT Quantum Engineering Laboratory have achieved a significant milestone in quantum error correction. The team's latest findings, published in today's edition of Nature, demonstrate a 1000-fold improvement in coherence times—a critical metric for quantum computing viability.</p>
-
-    <h3>The Challenge of Quantum Stability</h3>
-    <p>Quantum computers operate using qubits, which exist in superposition states and can perform vastly more calculations than classical bits. However, these quantum states are extraordinarily fragile. Environmental interference—from temperature fluctuations to electromagnetic radiation—causes "decoherence," where qubits lose their quantum properties and the computation fails.</p>
-
-    <p>For nearly three decades, maintaining stable qubits for sufficient durations has been the primary obstacle preventing quantum computers from solving real-world problems. Traditional approaches could sustain quantum states for only microseconds, requiring thousands of error-correction protocols that consumed more qubits than they protected.</p>
-
-    <h3>A New Approach</h3>
-    <p>The breakthrough leverages a novel combination of topological qubits and advanced cryogenic isolation techniques. By reducing quantum state decay by a factor of 1000, the research team has created a pathway toward practical quantum advantage—the point where quantum computers outperform classical computers on meaningful problems.</p>
-
-    <p>"This isn't just an incremental improvement," says Dr. James Chen, the project's principal investigator. "We've crossed a threshold where error correction becomes manageable rather than impossible. This changes the timeline for commercial quantum computing from decades to years."</p>
-
-    <h3>Market and Scientific Impact</h3>
-    <p>The implications are profound. Industries from pharmaceuticals to finance have invested billions in quantum computing research, anticipating applications in drug discovery, portfolio optimization, and cryptography. The announcement triggered immediate responses in both the scientific and business communities.</p>
-
-    <p>Immediately following the publication, major tech companies announced expanded commitments to quantum computing divisions. IBM released a statement confirming accelerated timelines for its quantum roadmap, while Google and Microsoft issued similar commitments to increased R&D investment.</p>
-
-    <h3>Next Steps</h3>
-    <p>The research team is now focused on scaling the technology. Current prototypes feature 128 qubits, but achieving practical quantum advantage typically requires thousands of stable qubits working in concert. The team estimates a 50-qubit system could be operational within 18 months, with a commercially viable 1,000-qubit system possible within five years.</p>
-
-    <p>Government agencies have taken notice as well. The Department of Energy announced $500 million in additional funding for quantum computing research, while the NSF committed to establishing three new Quantum Engineering Centers at leading research institutions.</p>
-
-    <p>Industry analysts predict this breakthrough could accelerate the quantum computing market by 3-5 years, potentially creating a $50 billion industry by 2030—significantly faster than previous forecasts.</p>
-  `,
-  sources: [
-    {
-      id: '1',
-      name: 'Nature',
-      logo: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=100&h=100&fit=crop',
-      reliability: 'high' as const,
-      excerpt:
-        'Quantum error correction with topological codes demonstrates unprecedented coherence times in experimental quantum processors.',
-      url: 'https://nature.com/articles/quantum-breakthrough-2024',
-      publishedAt: '2024-01-15 10:00 AM',
-    },
-    {
-      id: '2',
-      name: 'MIT News',
-      logo: 'https://images.unsplash.com/photo-1579154204601-01d6305d50af?w=100&h=100&fit=crop',
-      reliability: 'high' as const,
-      excerpt:
-        'Researchers achieve major quantum computing milestone with breakthrough in error correction technology.',
-      url: 'https://mit.edu/news/quantum-breakthrough',
-      publishedAt: '2024-01-15 9:30 AM',
-    },
-    {
-      id: '3',
-      name: 'Science Daily',
-      logo: 'https://images.unsplash.com/photo-1516110566962-a67fea4ebda4?w=100&h=100&fit=crop',
-      reliability: 'high' as const,
-      excerpt:
-        'Quantum computing gets closer to practical applications with new error correction advancement.',
-      url: 'https://sciencedaily.com/releases/quantum-computing-2024',
-      publishedAt: '2024-01-15 11:15 AM',
-    },
-    {
-      id: '4',
-      name: 'IBM Blog',
-      logo: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=100&h=100&fit=crop',
-      reliability: 'medium' as const,
-      excerpt:
-        'Analysis: What MIT\'s quantum breakthrough means for the industry and our roadmap.',
-      url: 'https://ibm.com/quantum-analysis-2024',
-      publishedAt: '2024-01-15 1:00 PM',
-    },
-  ],
+type ReaderArticle = {
+  id: string
+  title: string
+  subtitle: string
+  author: string
+  category: string
+  publishedAt: string
+  imageUrl?: string
+  imageCredit?: string
+  readTime: number
+  verificationStatus: 'verified' | 'pending' | 'unverified'
+  sourceCount: number
+  lastUpdated: string
+  aiGenerated: true
+  content: string
+  sources: Array<{
+    id: string
+    name: string
+    reliability: 'high' | 'medium' | 'low'
+    excerpt: string
+    url: string
+    publishedAt: string
+  }>
+  qualityScore?: {
+    sourceDiversity: number
+    sensationalism: number
+    factualConfidence: number
+    ledeStrength: number
+    overallScore: number
+  }
 }
 
 type ApiArticle = {
@@ -137,14 +84,15 @@ function toHtmlParagraphs(text: string) {
 
 export function ArticleReader({ articleId }: ArticleReaderProps) {
   const [isBookmarked, setIsBookmarked] = useState(false)
-  const [article, setArticle] = useState(ARTICLE_DATA)
+  const [article, setArticle] = useState<ReaderArticle | null>(null)
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const MIN_IMAGE_CONFIDENCE = 7
-  const evidenceSources = article.sources.slice(0, 3)
-  const overallScore = article.qualityScore?.overallScore ?? null
+  const evidenceSources = article?.sources.slice(0, 3) ?? []
+  const overallScore = article?.qualityScore?.overallScore ?? null
   const showTrustedImage =
-    Boolean(article.imageUrl) &&
-    article.verificationStatus === 'verified' &&
+    Boolean(article?.imageUrl) &&
+    article?.verificationStatus === 'verified' &&
     (overallScore === null || overallScore >= MIN_IMAGE_CONFIDENCE)
 
   useEffect(() => {
@@ -152,34 +100,42 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
 
     const loadArticle = async () => {
       try {
+        setLoadState('loading')
         const response = await fetch(`/api/articles/${articleId}`, {
           cache: 'no-store',
         })
 
-        if (!response.ok) return
+        if (!response.ok) {
+          setLoadState('error')
+          return
+        }
 
         const json = (await response.json()) as ApiArticle
         if (!mounted) return
 
         setArticle({
-          ...ARTICLE_DATA,
           id: json.id,
           title: json.headline,
           subtitle: json.subheadline || json.lede,
+          author: 'Dispatch AI Desk',
           category: json.category,
           publishedAt: json.publishedAt,
-          imageUrl: json.imageUrl ?? ARTICLE_DATA.imageUrl,
-          imageCredit: json.imageCredit ?? ARTICLE_DATA.imageCredit,
+          imageUrl: json.imageUrl,
+          imageCredit: json.imageCredit,
           readTime: json.readingTime,
           verificationStatus: json.verificationStatus,
           sourceCount: json.sources.length,
           lastUpdated: 'just now',
+          aiGenerated: true,
           content: toHtmlParagraphs(json.body),
           sources: json.sources,
           qualityScore: json.qualityScore,
         })
+        setLoadState('ready')
       } catch {
-        // Keep fallback story if API is unavailable.
+        if (mounted) {
+          setLoadState('error')
+        }
       }
     }
 
@@ -188,6 +144,27 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
       mounted = false
     }
   }, [articleId])
+
+  if (loadState === 'loading') {
+    return (
+      <article className="min-h-screen bg-background">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <p className="text-muted-foreground">Loading generated article...</p>
+        </div>
+      </article>
+    )
+  }
+
+  if (loadState === 'error' || !article) {
+    return (
+      <article className="min-h-screen bg-background">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <h1 className="text-2xl font-bold text-foreground mb-2">Article unavailable</h1>
+          <p className="text-muted-foreground">This story is not available in the generated feed.</p>
+        </div>
+      </article>
+    )
+  }
 
   return (
     <article className="min-h-screen bg-background">
@@ -335,25 +312,6 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
               <SourcePanel sources={article.sources} title="Verified Sources" />
             </div>
 
-            {/* Related Articles */}
-            <div className="mt-12 pt-8 border-t border-border">
-              <h3 className="text-2xl font-bold text-foreground mb-6">
-                Related Articles
-              </h3>
-              <div className="grid grid-cols-1 gap-4">
-                {[1, 2, 3].map((i) => (
-                  <div
-                    key={i}
-                    className="p-4 border border-border rounded-lg hover:border-primary/50 hover:bg-muted/50 transition-all cursor-pointer group"
-                  >
-                    <p className="text-sm text-muted-foreground mb-1">Technology</p>
-                    <p className="font-semibold text-foreground group-hover:text-primary transition-colors">
-                      Related quantum computing story {i}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* Sidebar */}
@@ -384,7 +342,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
                       Verification Status
                     </p>
                     <p className="text-sm font-semibold capitalize text-green-600 dark:text-green-400">
-                      Verified
+                      {article.verificationStatus}
                     </p>
                   </div>
                   <div>

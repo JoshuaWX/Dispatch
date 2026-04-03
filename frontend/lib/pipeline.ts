@@ -673,7 +673,11 @@ export async function generateArticleDraft(topic: string) {
 
 export async function runPipeline(input: GenerateStoryInput) {
   const topics = await getTopics()
-  const selectedTopic = input.topic?.trim() || topics[0] || 'AI regulation'
+  const selectedTopic = input.topic?.trim() || topics[0]
+
+  if (!selectedTopic) {
+    throw new Error('No topic available. Provide a topic or configure a trends source.')
+  }
 
   markPipelineRunning(selectedTopic)
   recordPipelineEvent({

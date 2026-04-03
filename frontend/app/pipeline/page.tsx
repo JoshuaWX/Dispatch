@@ -6,54 +6,6 @@ import { AnalyticsStats, PerformanceCharts } from '@/components/pipeline-analyti
 import { Button } from '@/components/ui/button'
 import { RefreshCw, Download, Play } from 'lucide-react'
 
-const MOCK_STORIES = [
-  {
-    id: '1',
-    title: 'Global Tech Summit Announces Major AI Initiatives',
-    stage: 'published' as const,
-    sources: 12,
-    confidence: 98,
-    timestamp: '2 hours ago',
-    category: 'Technology',
-  },
-  {
-    id: '2',
-    title: 'Healthcare Reform Bill Passes Committee Vote',
-    stage: 'analysis' as const,
-    sources: 8,
-    confidence: 87,
-    timestamp: '1 hour ago',
-    category: 'Politics',
-  },
-  {
-    id: '3',
-    title: 'Stock Market Reaches New All-Time High',
-    stage: 'verification' as const,
-    sources: 15,
-    confidence: 94,
-    timestamp: '30 minutes ago',
-    category: 'Business',
-  },
-  {
-    id: '4',
-    title: 'New Species Discovered in Amazon Rainforest',
-    stage: 'discovery' as const,
-    sources: 3,
-    confidence: 72,
-    timestamp: '15 minutes ago',
-    category: 'Environment',
-  },
-  {
-    id: '5',
-    title: 'Olympic Committee Selects Host City for 2032',
-    stage: 'published' as const,
-    sources: 10,
-    confidence: 99,
-    timestamp: '1 day ago',
-    category: 'Sports',
-  },
-]
-
 type PipelineApiEvent = {
   id: string
   timestamp: string
@@ -85,35 +37,18 @@ function mapStage(stage: PipelineApiEvent['stage']) {
   return 'analysis' as const
 }
 
-const VERIFICATION_DATA = [
-  { name: 'Mon', value: 45 },
-  { name: 'Tue', value: 52 },
-  { name: 'Wed', value: 48 },
-  { name: 'Thu', value: 61 },
-  { name: 'Fri', value: 55 },
-  { name: 'Sat', value: 43 },
-  { name: 'Sun', value: 38 },
-]
-
-const STORY_METRICS = [
-  { name: 'Week 1', published: 45, pending: 12 },
-  { name: 'Week 2', published: 52, pending: 8 },
-  { name: 'Week 3', published: 48, pending: 15 },
-  { name: 'Week 4', published: 61, pending: 10 },
-]
-
-const CATEGORY_DATA = [
-  { name: 'Technology', value: 145 },
-  { name: 'Business', value: 98 },
-  { name: 'Politics', value: 87 },
-  { name: 'Environment', value: 72 },
-  { name: 'Other', value: 56 },
-]
-
 export default function PipelinePage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [stories, setStories] = useState(MOCK_STORIES)
+  const [stories, setStories] = useState<Array<{
+    id: string
+    title: string
+    stage: 'discovery' | 'verification' | 'analysis' | 'published'
+    sources: number
+    confidence: number
+    timestamp: string
+    category: string
+  }>>([])
   const [pipelineState, setPipelineState] = useState<PipelineStatusResponse | null>(null)
   const [articles, setArticles] = useState<ApiArticle[]>([])
 
@@ -126,7 +61,7 @@ export default function PipelinePage() {
         setArticles(json.articles)
       }
     } catch {
-      // Keep fallback metrics when article feed is unavailable.
+      setArticles([])
     }
   }
 
@@ -147,9 +82,12 @@ export default function PipelinePage() {
       }))
       if (mappedStories.length > 0) {
         setStories(mappedStories)
+      } else {
+        setStories([])
       }
     } catch {
-      // Keep fallback feed when API data is unavailable.
+      setPipelineState(null)
+      setStories([])
     }
   }
 
@@ -207,10 +145,6 @@ export default function PipelinePage() {
       counts.set(article.category, (counts.get(article.category) ?? 0) + 1)
     })
 
-    if (counts.size === 0) {
-      return CATEGORY_DATA
-    }
-
     return Array.from(counts.entries()).map(([name, value]) => ({ name, value }))
   }, [articles])
 
@@ -223,10 +157,9 @@ export default function PipelinePage() {
       buckets.set(day, (buckets.get(day) ?? 0) + (event.status === 'completed' ? 1 : 0))
     })
 
-    const fallback = VERIFICATION_DATA
     const mapped = Array.from(buckets.entries()).map(([name, value]) => ({ name, value }))
 
-    return mapped.length > 0 ? mapped : fallback
+    return mapped
   }, [pipelineState])
 
   const storyMetricsData = useMemo(() => {
@@ -235,7 +168,7 @@ export default function PipelinePage() {
 
     return [
       { name: 'Live', published, pending },
-      { name: 'Recent', published: Math.max(1, liveMetrics.completedPublishes), pending: liveMetrics.failedRuns },
+      { name: 'Recent', published: liveMetrics.completedPublishes, pending: liveMetrics.failedRuns },
     ]
   }, [articles.length, liveMetrics.completedPublishes, liveMetrics.failedRuns, stories])
 
@@ -256,6 +189,37 @@ export default function PipelinePage() {
       `Published stories in the last 7 days: ${liveMetrics.publishedThisWeek}`,
     ]
   }, [liveMetrics.activeTopic, liveMetrics.failedRuns, liveMetrics.publishedThisWeek, pipelineState?.status])
+
+  const qualityMetrics = useMemo(
+    () => [
+      {
+        label: 'Avg. Verification Time',
+        value: liveMetrics.averageVerificationTime,
+        status: liveMetrics.averageVerificationTime === 'n/a' ? 'good' as const : 'excellent' as const,
+      },
+      {
+        label: 'Source Quality',
+        value: liveMetrics.sourceQuality,
+        status: liveMetrics.sourceQuality === 'n/a' ? 'good' as const : 'excellent' as const,
+      },
+      {
+        label: 'Published This Week',
+        value: String(liveMetrics.publishedThisWeek),
+        status: liveMetrics.publishedThisWeek > 0 ? 'excellent' as const : 'good' as const,
+      },
+      {
+        label: 'Failed Runs',
+        value: String(liveMetrics.failedRuns),
+        status: liveMetrics.failedRuns === 0 ? 'excellent' as const : 'good' as const,
+      },
+    ],
+    [
+      liveMetrics.averageVerificationTime,
+      liveMetrics.failedRuns,
+      liveMetrics.publishedThisWeek,
+      liveMetrics.sourceQuality,
+    ]
+  )
 
   useEffect(() => {
     void loadArticles()
@@ -378,7 +342,16 @@ export default function PipelinePage() {
 
         {/* Pipeline Feed */}
         <div className="mb-12">
-          <PipelineFeed stories={stories} />
+          {stories.length > 0 ? (
+            <PipelineFeed stories={stories} />
+          ) : (
+            <div className="bg-card rounded-lg border border-border p-8 text-center">
+              <h3 className="text-xl font-semibold text-foreground mb-2">No pipeline events yet</h3>
+              <p className="text-muted-foreground">
+                Run the pipeline to generate and publish AI stories.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Charts Section */}
@@ -386,11 +359,18 @@ export default function PipelinePage() {
           <h2 className="text-2xl font-bold text-foreground mb-6">
             Performance Analytics
           </h2>
-          <PerformanceCharts
-            verificationData={verificationData}
-            storyMetricsData={storyMetricsData}
-            categoryData={categoryData}
-          />
+          {verificationData.length > 0 || storyMetricsData.some((item) => item.published || item.pending) || categoryData.length > 0 ? (
+            <PerformanceCharts
+              verificationData={verificationData}
+              storyMetricsData={storyMetricsData}
+              categoryData={categoryData}
+              qualityMetrics={qualityMetrics}
+            />
+          ) : (
+            <div className="bg-card rounded-lg border border-border p-8 text-center">
+              <p className="text-muted-foreground">Analytics will appear after generated stories are processed.</p>
+            </div>
+          )}
         </div>
 
         {/* Key Insights */}

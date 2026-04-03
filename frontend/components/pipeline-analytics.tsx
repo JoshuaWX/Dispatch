@@ -68,12 +68,18 @@ interface PerformanceChartsProps {
   verificationData: ChartData[]
   storyMetricsData: ChartData[]
   categoryData: ChartData[]
+  qualityMetrics: Array<{
+    label: string
+    value: string
+    status: 'good' | 'excellent'
+  }>
 }
 
 export function PerformanceCharts({
   verificationData,
   storyMetricsData,
   categoryData,
+  qualityMetrics,
 }: PerformanceChartsProps) {
   const COLORS = [
     'hsl(var(--color-chart-1))',
@@ -175,32 +181,33 @@ export function PerformanceCharts({
         <h3 className="text-lg font-semibold text-foreground mb-4">
           Quality Metrics
         </h3>
-        <div className="space-y-4">
-          {[
-            { label: 'Avg. Verification Time', value: '2.5 hours', status: 'good' },
-            { label: 'Source Accuracy', value: '99.2%', status: 'excellent' },
-            { label: 'Correction Rate', value: '0.8%', status: 'good' },
-            { label: 'Reader Trust Score', value: '9.2/10', status: 'excellent' },
-          ].map((metric, idx) => (
-            <div key={idx} className="pb-3 border-b border-border last:border-0">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-muted-foreground">
-                  {metric.label}
-                </span>
-                <span
-                  className={`text-xs font-semibold px-2 py-1 rounded-full ${
-                    metric.status === 'excellent'
-                      ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
-                      : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400'
-                  }`}
-                >
-                  {metric.status}
-                </span>
+        {qualityMetrics.length > 0 ? (
+          <div className="space-y-4">
+            {qualityMetrics.map((metric, idx) => (
+              <div key={idx} className="pb-3 border-b border-border last:border-0">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm text-muted-foreground">
+                    {metric.label}
+                  </span>
+                  <span
+                    className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                      metric.status === 'excellent'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
+                        : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400'
+                    }`}
+                  >
+                    {metric.status}
+                  </span>
+                </div>
+                <p className="text-xl font-bold text-foreground">{metric.value}</p>
               </div>
-              <p className="text-xl font-bold text-foreground">{metric.value}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Quality metrics will appear after the first completed pipeline runs.
+          </p>
+        )}
       </div>
     </div>
   )
