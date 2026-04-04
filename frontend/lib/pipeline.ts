@@ -35,10 +35,6 @@ import { resolveStoryImage } from '@/lib/story-image'
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
 const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
-const AUTO_GENERATION_INTERVAL_MS = Math.max(
-  60_000,
-  Number.parseInt(process.env.AUTO_GENERATION_INTERVAL_MS ?? '', 10) || 15 * 60 * 1000
-)
 
 const globalForPipeline = globalThis as typeof globalThis & {
   __dispatchAutoRunPromise?: Promise<void>
@@ -643,17 +639,7 @@ function shouldAutonomousRun(articleCount: number) {
     return false
   }
 
-  if (articleCount === 0) {
-    return true
-  }
-
-  const lastActivity = snapshot.lastSuccessAt ?? snapshot.lastRunAt
-  if (!lastActivity) {
-    return true
-  }
-
-  const elapsed = Date.now() - new Date(lastActivity).getTime()
-  return elapsed >= AUTO_GENERATION_INTERVAL_MS
+  return articleCount === 0
 }
 
 function maybeTriggerAutonomousRun(articleCount: number, snapshot = getPipelineSnapshot()) {
