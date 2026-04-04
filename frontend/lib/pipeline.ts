@@ -14,7 +14,6 @@ import {
   getArticleByIdPersistent,
   getPipelineSnapshot,
   listArticlesPersistent,
-  listArticles,
   markPipelineDegraded,
   markPipelineIdle,
   markPipelineRunning,
@@ -618,10 +617,30 @@ export async function getPublishedArticle(articleId: string) {
   return getArticleByIdPersistent(articleId)
 }
 
-export function getPipelineStatus() {
+function toPublishedPipelineEvents(articles: PublishedArticle[]): PipelineEvent[] {
+  return articles.slice(0, 25).map((article) => ({
+    id: article.id,
+    timestamp: article.publishedAt,
+    stage: 'publish',
+    status: 'completed',
+    articleTitle: article.headline,
+    details: article.subheadline || article.lede.substring(0, 100),
+  }))
+}
+
+export async function getPipelineStatus() {
+  const articles = await listArticlesPersistent()
   const snapshot = getPipelineSnapshot()
-  maybeTriggerAutonomousRun(listArticles().length, snapshot)
-  return snapshot
+  maybeTriggerAutonomousRun(articles.length, snapshot)
+
+  if (snapshot.status === 'running' || snapshot.status === 'degraded') {
+    return snapshot
+  }
+
+  return {
+    ...snapshot,
+    recentEvents: toPublishedPipelineEvents(articles),
+  }
 }
 
 function chooseRandomTopic(topics: string[]) {
