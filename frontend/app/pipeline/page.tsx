@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { PipelineFeed } from '@/components/pipeline-feed'
 import { AnalyticsStats, PerformanceCharts } from '@/components/pipeline-analytics'
 import { Button } from '@/components/ui/button'
-import { RefreshCw, Download, Play } from 'lucide-react'
+import { RefreshCw, Download } from 'lucide-react'
 
 type PipelineApiEvent = {
   id: string
@@ -39,7 +39,6 @@ function mapStage(stage: PipelineApiEvent['stage']) {
 
 export default function PipelinePage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [isGenerating, setIsGenerating] = useState(false)
   const [stories, setStories] = useState<Array<{
     id: string
     title: string
@@ -245,22 +244,6 @@ export default function PipelinePage() {
     setIsRefreshing(false)
   }
 
-  const handleGenerate = async () => {
-    setIsGenerating(true)
-    try {
-      await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({}),
-      })
-    } finally {
-      await loadPipeline()
-      setIsGenerating(false)
-    }
-  }
-
   return (
     <main className="min-h-screen bg-background">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -277,14 +260,6 @@ export default function PipelinePage() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={handleGenerate}
-                disabled={isGenerating}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                {isGenerating ? 'Running Pipeline...' : 'Run Pipeline Now'}
-              </Button>
               <Button
                 variant="outline"
                 size="sm"

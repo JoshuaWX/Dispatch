@@ -82,9 +82,5 @@ export async function resolveStoryImage(
     return wikiImage
   }
 
-  const fallback = categoryFallback[category]
-  return {
-    imageUrl: fallback.url,
-    imageCredit: fallback.credit,
-  }
+  return null
 }
