@@ -21,10 +21,10 @@ where exists (
   where jobname = 'dispatch-hourly-generate'
 );
 
--- Run every 30 minutes.
+-- Run every hour.
 select cron.schedule(
-  'dispatch-30min-generate',
-  '*/30 * * * *',
+  'dispatch-hourly-generate',
+  '0 * * * *',
   $$
     select net.http_get(
       url := '<YOUR_VERCEL_APP_URL>/api/cron/generate',
