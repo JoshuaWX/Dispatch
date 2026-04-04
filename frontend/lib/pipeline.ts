@@ -28,7 +28,7 @@ import {
   QA_PROMPT,
   RESEARCH_BRIEF_PROMPT,
 } from '@/lib/prompts'
-import { getTopicImageHint, getTopics } from '@/lib/newsdata'
+import { getTopicImageHint, getTopics, searchNewsData } from '@/lib/newsdata'
 import { resolveStoryImage } from '@/lib/story-image'
 
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
@@ -95,6 +95,86 @@ function isSpecificSourceUrl(value: string) {
   }
 }
 
+const BOILERPLATE_PHRASES = [
+  'the latest signals',
+  'experts and observers',
+  'the responsible reading',
+  'still depends on evidence',
+  'under active debate',
+  'preliminary development',
+  'durable outcome',
+]
+
+function containsBoilerplate(value: string) {
+  const lower = value.toLowerCase()
+  return BOILERPLATE_PHRASES.some((phrase) => lower.includes(phrase))
+}
+
+function isResearchBrief(value: ResearchBrief | { error: 'insufficient_data' }): value is ResearchBrief {
+  return !('error' in value)
+}
+
+function buildResearchBriefFromSearchHits(topic: string, searchHits: Awaited<ReturnType<typeof searchNewsData>>): ResearchBrief | null {
+  const sources = searchHits.slice(0, 6).map((hit) => ({
+    name: hit.source,
+    url: hit.url,
+    credibilityNotes: hit.excerpt || `${hit.source} article`,
+  }))
+
+  const namedSources = Array.from(new Set(searchHits.map((hit) => hit.source).filter(Boolean))).slice(0, 12)
+  const keyFacts = searchHits
+    .filter((hit) => Boolean(hit.excerpt))
+    .slice(0, 6)
+    .map((hit) => ({
+      fact: hit.excerpt,
+      source: hit.source,
+      confidence: 'reported' as const,
+    }))
+
+  if (sources.length < 3 || keyFacts.length < 3 || namedSources.length < 3) {
+    return null
+  }
+
+  const timeline = searchHits.slice(0, 3).map((hit) => ({
+    date: hit.publishedAt,
+    event: `${hit.source} reported ${hit.title}`,
+  }))
+
+  const conflictingClaims = searchHits.length >= 2
+    ? [
+        {
+          claim: `${searchHits[0].source} emphasizes the immediate development around ${topic}.`,
+          source: searchHits[0].source,
+          counterclaim: `${searchHits[1].source} frames the same topic with a different angle or emphasis.`,
+          counterSource: searchHits[1].source,
+        },
+      ]
+    : []
+
+  const backgroundContext = Array.from(new Set(
+    searchHits
+      .map((hit) => hit.excerpt)
+      .filter((excerpt): excerpt is string => Boolean(excerpt))
+  ))
+    .slice(0, 3)
+    .join(' ')
+
+  if (!backgroundContext) {
+    return null
+  }
+
+  return {
+    topic,
+    category: pickCategory(topic),
+    sources,
+    keyFacts,
+    namedSources,
+    timeline,
+    conflictingClaims,
+    backgroundContext,
+  }
+}
+
 function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -107,47 +187,75 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
 
   const category = isArticleCategory(input.category) ? input.category : pickCategory(topic)
 
+  const sources = input.sources
+    .filter((source) => source && typeof source === 'object')
+    .map((source) => {
+      const typed = source as { name?: unknown; url?: unknown; credibilityNotes?: unknown }
+      const name = typeof typed.name === 'string' ? typed.name.trim() : ''
+      const url = typeof typed.url === 'string' ? typed.url.trim() : ''
+      const credibilityNotes =
+        typeof typed.credibilityNotes === 'string' ? typed.credibilityNotes.trim() : ''
+
+      if (!name || !url || !isSpecificSourceUrl(url)) {
+        return null
+      }
+
+      return {
+        name,
+        url,
+        credibilityNotes,
+      }
+    })
+      .filter((source): source is ResearchBrief['sources'][number] => Boolean(source))
+    .slice(0, 6)
+
+  const keyFacts = input.keyFacts
+    .filter((fact) => fact && typeof fact === 'object')
+    .map((fact) => {
+      const typed = fact as { fact?: unknown; source?: unknown; confidence?: unknown }
+      const factText = typeof typed.fact === 'string' ? typed.fact.trim() : ''
+      const sourceText = typeof typed.source === 'string' ? typed.source.trim() : ''
+      const confidence =
+        typed.confidence === 'confirmed' ||
+        typed.confidence === 'reported' ||
+        typed.confidence === 'alleged'
+          ? typed.confidence
+          : null
+
+      if (!factText || !sourceText || !confidence) {
+        return null
+      }
+
+      return {
+        fact: factText,
+        source: sourceText,
+        confidence,
+      }
+    })
+    .filter((fact): fact is ResearchBrief['keyFacts'][number] => Boolean(fact))
+    .slice(0, 16)
+
+  const namedSources = Array.isArray(input.namedSources)
+    ? input.namedSources
+        .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+        .slice(0, 12)
+    : []
+
+  const backgroundContext =
+    typeof input.backgroundContext === 'string' && input.backgroundContext.trim()
+      ? input.backgroundContext.trim()
+      : ''
+
+  if (sources.length < 3 || keyFacts.length < 3 || namedSources.length < 3 || !backgroundContext) {
+    return null
+  }
+
   return {
     topic: typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : topic,
     category,
-    sources: input.sources
-      .filter((source) => source && typeof source === 'object')
-      .map((source) => {
-        const typed = source as { name?: unknown; url?: unknown; credibilityNotes?: unknown }
-        const rawUrl = typeof typed.url === 'string' ? typed.url.trim() : ''
-        const url = isSpecificSourceUrl(rawUrl) ? rawUrl : ''
-        return {
-          name: typeof typed.name === 'string' ? typed.name : 'Unknown source',
-          url: url || 'https://example.com',
-          credibilityNotes:
-            typeof typed.credibilityNotes === 'string'
-              ? typed.credibilityNotes
-              : 'Credibility context unavailable.',
-        }
-      })
-      .filter((source) => source.url !== 'https://example.com')
-      .slice(0, 6),
-    keyFacts: input.keyFacts
-      .filter((fact) => fact && typeof fact === 'object')
-      .map((fact) => {
-        const typed = fact as { fact?: unknown; source?: unknown; confidence?: unknown }
-        const confidence: ResearchBrief['keyFacts'][number]['confidence'] =
-          typed.confidence === 'confirmed' ||
-          typed.confidence === 'reported' ||
-          typed.confidence === 'alleged'
-            ? typed.confidence
-            : 'reported'
-
-        return {
-          fact: typeof typed.fact === 'string' ? typed.fact : `${topic} remains under active reporting.`,
-          source: typeof typed.source === 'string' ? typed.source : 'Unknown source',
-          confidence,
-        }
-      })
-      .slice(0, 16),
-    namedSources: Array.isArray(input.namedSources)
-      ? input.namedSources.filter((item): item is string => typeof item === 'string').slice(0, 12)
-      : [],
+    sources,
+    keyFacts,
+    namedSources,
     timeline: Array.isArray(input.timeline)
       ? input.timeline
           .filter((entry) => entry && typeof entry === 'object')
@@ -188,42 +296,31 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
           })
           .slice(0, 10)
       : [],
-    backgroundContext:
-      typeof input.backgroundContext === 'string' && input.backgroundContext.trim()
-        ? input.backgroundContext.trim()
-        : `${topic} is evolving and requires careful source-based reporting.`,
+    backgroundContext,
   }
 }
 
-function normalizeDraft(
-  value: unknown,
-  research: ResearchBrief,
-  fallback: ArticleDraft
-): ArticleDraft | null {
+function normalizeDraft(value: unknown, research: ResearchBrief): ArticleDraft | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
   const input = value as Partial<ArticleDraft>
-  if (typeof input.body !== 'string' || typeof input.headline !== 'string') {
+  if (typeof input.body !== 'string' || typeof input.headline !== 'string' || typeof input.subheadline !== 'string') {
     return null
   }
 
   const category = isArticleCategory(input.category) ? input.category : research.category
 
   return {
-    headline: input.headline.trim() || fallback.headline,
-    subheadline:
-      typeof input.subheadline === 'string' && input.subheadline.trim()
-        ? input.subheadline.trim()
-        : fallback.subheadline,
-    lede:
-      typeof input.lede === 'string' && input.lede.trim() ? input.lede.trim() : fallback.lede,
-    body: input.body.trim() || fallback.body,
+    headline: input.headline.trim(),
+    subheadline: input.subheadline.trim(),
+    lede: typeof input.lede === 'string' && input.lede.trim() ? input.lede.trim() : '',
+    body: input.body.trim(),
     category,
     tags: Array.isArray(input.tags)
       ? input.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 8)
-      : fallback.tags,
+      : [],
   }
 }
 
@@ -444,20 +541,22 @@ function buildResearchBrief(topic: string): ResearchBrief {
 }
 
 function buildArticleDraft(research: ResearchBrief): ArticleDraft {
-  const topicFragment = research.topic.toLowerCase()
+  const leadSource = research.sources[0]
+  const secondarySource = research.sources[1]
+  const highlightFact = research.keyFacts[0]?.fact ?? `${research.topic} is drawing sustained coverage.`
+  const contextFact = research.keyFacts[1]?.fact ?? 'Multiple outlets are following the story as it develops.'
+  const backgroundFact = research.backgroundContext
 
   return {
-    headline: `${research.topic} puts pressure on decision makers to respond`,
-    subheadline:
-      'The latest signals suggest the story is moving, but the durable outcome still depends on evidence, timing, and execution.',
-    lede: `The latest developments around ${topicFragment} are forcing decision makers, analysts, and affected stakeholders to reassess the next phase of the story.`,
+    headline: `${research.topic} draws broader attention as reporting adds new detail`,
+    subheadline: `Coverage from ${leadSource?.name ?? 'multiple outlets'} and other sources points to a story with clear near-term significance.`,
+    lede: `Reporting on ${research.topic} is converging around a small set of verified details: what happened, who is involved, and why the topic matters now.`,
     body: [
-      `${research.topic} is attracting close attention because multiple sources point to the same underlying shift: momentum is building, but the result is not yet settled. The research brief indicates that the most important facts are verified, while the larger implications remain under active debate.`,
-      `Several credible sources describe the situation as consequential for the category in question. In newsroom terms, that means the story deserves careful attribution, measured language, and a clear separation between confirmed developments and reported claims.`,
-      `The latest reporting suggests that any meaningful change will depend on how quickly key actors can turn signals into action. That is the central tension in stories like this one: a narrow window of opportunity paired with persistent uncertainty.`,
-      `Experts and observers cited in the research brief disagree on how durable the shift will be. Some see the current moment as an early signal of a longer-term change, while others describe it as a preliminary development that still requires more corroboration.`,
-      `What matters most for readers is the structure of the evidence. The story is not just that something happened; it is that the development was observed by multiple credible sources, placed in context, and checked against conflicting claims.`,
-      `Taken together, the reporting points to a news event with real significance, but not one that should be overstated. The responsible reading is that the situation is moving, the implications are material, and the final shape of the story will depend on what happens next.`,
+      `${highlightFact} ${leadSource ? `That detail appears in coverage from ${leadSource.name}, which points readers to the original reporting rather than a homepage or secondary roundup.` : ''}`,
+      `${contextFact} ${secondarySource ? `A second source, ${secondarySource.name}, adds another angle and helps show where the reporting overlaps.` : ''}`,
+      `The immediate reporting value here is not dramatic language. It is the convergence of sources, dates, and specific observations that let readers understand the event without losing the thread of the underlying facts.`,
+      `The background in the brief makes the broader frame clearer: ${backgroundFact}. That context is what turns a short news update into a usable reported story for readers who are encountering the topic for the first time.`,
+      `Taken together, the available reporting suggests a news event with enough substance to justify a full article. The piece should be read as a mapped account of what is known so far, not as a forecast or a vague summary of sentiment.`,
     ].join('\n\n'),
     category: research.category,
     tags: [research.category.toLowerCase(), ...research.topic.toLowerCase().split(/\s+/).slice(0, 3)],
@@ -703,41 +802,59 @@ function maybeTriggerAutonomousRun(articleCount: number, snapshot = getPipelineS
     })
 }
 
-export async function researchTopic(topic: string) {
-  const fallbackResearch = buildResearchBrief(topic)
+export async function researchTopic(topic: string): Promise<ResearchBrief | { error: 'insufficient_data' }> {
+  const searchHits = await searchNewsData(topic)
 
-  const modelOutput = await callModel(RESEARCH_BRIEF_PROMPT, {
+  console.info('[research] web search invoked via NewsData API', {
     topic,
-    categoryHint: fallbackResearch.category,
-    sourceHints: fallbackResearch.sources,
+    resultCount: searchHits.length,
+    urls: searchHits.slice(0, 5).map((item) => item.url),
   })
 
-  const parsedResearch = normalizeResearchBrief(
-    topic,
-    parseJsonObject<ResearchBrief>(modelOutput)
-  )
-
-  if (parsedResearch && parsedResearch.sources.length >= 2 && parsedResearch.keyFacts.length >= 2) {
-    return parsedResearch
+  if (searchHits.length < 3) {
+    return { error: 'insufficient_data' as const }
   }
 
-  return fallbackResearch
+  const research = buildResearchBriefFromSearchHits(topic, searchHits)
+  if (!research) {
+    return { error: 'insufficient_data' as const }
+  }
+
+  console.info('[research] final research JSON before writer', JSON.stringify(research, null, 2))
+
+  return research
 }
 
-async function generateDraftFromResearch(research: ResearchBrief, flaggedClaims: string[] = []) {
-  const fallbackDraft = buildArticleDraft(research)
+async function generateDraftFromResearch(
+  research: ResearchBrief,
+  flaggedClaims: string[] = [],
+  rewriteReason?: 'boilerplate_detected' | 'quality_retry'
+) {
   const modelOutput = await callModel(ARTICLE_WRITER_PROMPT, {
     research,
     flaggedClaimsToAvoid: flaggedClaims,
+    rewriteReason,
   })
 
-  const parsedDraft = normalizeDraft(
-    parseJsonObject<ArticleDraft>(modelOutput),
-    research,
-    fallbackDraft
-  )
+  const parsedDraft = normalizeDraft(parseJsonObject<ArticleDraft>(modelOutput), research)
+  const draft = parsedDraft ?? buildArticleDraft(research)
 
-  return parsedDraft ?? fallbackDraft
+  const boilerplateDetected =
+    containsBoilerplate(draft.headline) ||
+    containsBoilerplate(draft.subheadline) ||
+    containsBoilerplate(draft.lede) ||
+    containsBoilerplate(draft.body)
+
+  if (boilerplateDetected) {
+    console.warn('Article rejected: boilerplate detected')
+    if (rewriteReason === 'boilerplate_detected') {
+      return null
+    }
+
+    return generateDraftFromResearch(research, flaggedClaims, 'boilerplate_detected')
+  }
+
+  return draft
 }
 
 async function evaluateQuality(research: ResearchBrief, draft: ArticleDraft): Promise<QualityScore> {
@@ -753,7 +870,15 @@ async function evaluateQuality(research: ResearchBrief, draft: ArticleDraft): Pr
 
 export async function generateArticleDraft(topic: string) {
   const research = await researchTopic(topic)
+  if (!isResearchBrief(research)) {
+    return { research, draft: null, qualityScore: null }
+  }
+
   const draft = await generateDraftFromResearch(research)
+  if (!draft) {
+    return { research, draft: null, qualityScore: null }
+  }
+
   const qualityScore = await evaluateQuality(research, draft)
 
   return { research, draft, qualityScore }
@@ -778,6 +903,24 @@ export async function runPipeline(input: GenerateStoryInput) {
   try {
     setProgress('research', 25, `Researching ${selectedTopic}`)
     const research = await researchTopic(selectedTopic)
+    if (!isResearchBrief(research)) {
+      recordPipelineEvent({
+        stage: 'research',
+        status: 'failed',
+        articleTitle: selectedTopic,
+        details: 'Insufficient real-world sources were found, so the topic was skipped.',
+      })
+      markPipelineDegraded(`Insufficient data for ${selectedTopic}`)
+      return {
+        published: false,
+        topic: selectedTopic,
+        research,
+        draft: null,
+        qualityScore: null,
+        article: null,
+      }
+    }
+
     recordPipelineEvent({
       stage: 'research',
       status: 'completed',
@@ -787,6 +930,24 @@ export async function runPipeline(input: GenerateStoryInput) {
 
     setProgress('writing', 55, 'Drafting reported article')
     let draft = await generateDraftFromResearch(research)
+    if (!draft) {
+      recordPipelineEvent({
+        stage: 'writing',
+        status: 'failed',
+        articleTitle: selectedTopic,
+        details: 'Draft generation returned no publishable article.',
+      })
+      markPipelineDegraded(`Draft generation failed for ${selectedTopic}`)
+      return {
+        published: false,
+        topic: selectedTopic,
+        research,
+        draft: null,
+        qualityScore: null,
+        article: null,
+      }
+    }
+
     recordPipelineEvent({
       stage: 'writing',
       status: 'completed',
@@ -799,6 +960,24 @@ export async function runPipeline(input: GenerateStoryInput) {
 
     if (!qualityScore.publishRecommendation) {
       draft = await generateDraftFromResearch(research, qualityScore.flaggedClaims)
+      if (!draft) {
+        recordPipelineEvent({
+          stage: 'writing',
+          status: 'failed',
+          articleTitle: selectedTopic,
+          details: 'Retry generation returned no publishable article.',
+        })
+        markPipelineDegraded(`Retry generation failed for ${selectedTopic}`)
+        return {
+          published: false,
+          topic: selectedTopic,
+          research,
+          draft: null,
+          qualityScore: null,
+          article: null,
+        }
+      }
+
       qualityScore = await evaluateQuality(research, draft)
     }
 

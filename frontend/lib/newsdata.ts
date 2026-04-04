@@ -7,8 +7,18 @@ type CachedTopics = {
   fetchedAt: number
 }
 
+export type NewsSearchHit = {
+  title: string
+  url: string
+  source: string
+  excerpt: string
+  publishedAt: string
+  imageUrl?: string
+}
+
 const globalForNewsData = globalThis as typeof globalThis & {
   __dispatchNewsDataCache?: CachedTopics
+  __dispatchNewsSearchCache?: Record<string, { results: NewsSearchHit[]; fetchedAt: number }>
 }
 
 function normalizeTopic(value: string) {
@@ -97,4 +107,90 @@ export async function getTopicImageHint(topic: string): Promise<string | null> {
   }
 
   return globalForNewsData.__dispatchNewsDataCache?.imageByTopic?.[normalized] ?? null
+}
+
+export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
+  const normalizedTopic = normalizeTopic(topic).toLowerCase()
+  if (!normalizedTopic) {
+    return []
+  }
+
+  const now = Date.now()
+  const cache = globalForNewsData.__dispatchNewsSearchCache?.[normalizedTopic]
+  if (cache && now - cache.fetchedAt < ONE_HOUR_MS && cache.results.length > 0) {
+    return cache.results
+  }
+
+  const apiKey = process.env.NEWSDATA_API_KEY?.trim()
+  if (!apiKey) {
+    return []
+  }
+
+  try {
+    const url = new URL(`${NEWSDATA_BASE_URL}/news`)
+    url.searchParams.set('apikey', apiKey)
+    url.searchParams.set('language', 'en')
+    url.searchParams.set('category', 'world,technology,business,science')
+    url.searchParams.set('q', normalizedTopic)
+    url.searchParams.set('size', '10')
+
+    const response = await fetch(url.toString(), {
+      next: { revalidate: 3600 },
+    })
+
+    if (!response.ok) {
+      throw new Error(`NewsData search failed with status ${response.status}`)
+    }
+
+    const payload = (await response.json()) as {
+      results?: Array<{
+        title?: string
+        link?: string
+        source_id?: string
+        source_url?: string
+        description?: string
+        pubDate?: string
+        image_url?: string
+      }>
+    }
+
+    const results = (payload.results ?? [])
+      .map((item) => {
+        const url = item.link?.trim() || item.source_url?.trim() || ''
+        if (!url) {
+          return null
+        }
+
+        let source = item.source_id?.trim() || ''
+        if (!source) {
+          try {
+            source = new URL(url).hostname.replace(/^www\./, '')
+          } catch {
+            source = 'news source'
+          }
+        }
+
+        return {
+          title: item.title?.trim() || topic,
+          url,
+          source,
+          excerpt: item.description?.trim() || '',
+          publishedAt: item.pubDate?.trim() || 'Today',
+          imageUrl: item.image_url?.trim() || undefined,
+        }
+      })
+      .filter((item): item is NewsSearchHit => Boolean(item))
+
+    globalForNewsData.__dispatchNewsSearchCache = {
+      ...(globalForNewsData.__dispatchNewsSearchCache ?? {}),
+      [normalizedTopic]: {
+        results,
+        fetchedAt: now,
+      },
+    }
+
+    return results
+  } catch {
+    return []
+  }
 }
