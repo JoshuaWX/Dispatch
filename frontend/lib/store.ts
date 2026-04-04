@@ -143,20 +143,37 @@ function persistArticles(articles: PublishedArticle[]) {
   }
 }
 
-const createInitialState = (): DispatchStore => ({
-  articles: loadPersistedArticles(),
-  events: [],
-  pipeline: {
-    status: 'idle',
-    stage: 'idle',
-    activeTopic: null,
-    progress: 0,
-    lastRunAt: null,
-    lastSuccessAt: null,
-    message: 'Ready to process the next trending story.',
-    recentEvents: [],
-  },
-})
+function articlesToPipelineEvents(articles: PublishedArticle[]): PipelineEvent[] {
+  return articles
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+    .slice(0, 25)
+    .map((article) => ({
+      id: article.id,
+      timestamp: article.publishedAt,
+      stage: 'publish' as const,
+      status: 'completed' as const,
+      articleTitle: article.headline,
+      details: article.subheadline || article.lede.substring(0, 100),
+    }))
+}
+
+const createInitialState = (): DispatchStore => {
+  const articles = loadPersistedArticles()
+  return {
+    articles,
+    events: articlesToPipelineEvents(articles),
+    pipeline: {
+      status: 'idle',
+      stage: 'idle',
+      activeTopic: null,
+      progress: 0,
+      lastRunAt: null,
+      lastSuccessAt: null,
+      message: 'Ready to process the next trending story.',
+      recentEvents: articlesToPipelineEvents(articles),
+    },
+  }
+}
 
 const globalForDispatch = globalThis as typeof globalThis & {
   __dispatchStore?: DispatchStore
@@ -195,6 +212,7 @@ export function upsertArticle(article: PublishedArticle) {
   if (index >= 0) {
     store.articles[index] = article
     persistArticles(store.articles)
+    store.events = articlesToPipelineEvents(store.articles)
     return article
   }
 
@@ -221,11 +239,13 @@ export function upsertArticle(article: PublishedArticle) {
     }
     store.articles[duplicateIndex] = merged
     persistArticles(store.articles)
+    store.events = articlesToPipelineEvents(store.articles)
     return merged
   }
 
   store.articles.unshift(article)
   persistArticles(store.articles)
+  store.events = articlesToPipelineEvents(store.articles)
   return article
 }
 
