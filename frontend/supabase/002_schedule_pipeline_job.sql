@@ -7,6 +7,13 @@ create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
 -- Remove previous job if it already exists.
+select cron.unschedule('dispatch-30min-generate')
+where exists (
+  select 1
+  from cron.job
+  where jobname = 'dispatch-30min-generate'
+);
+
 select cron.unschedule('dispatch-hourly-generate')
 where exists (
   select 1
@@ -14,10 +21,10 @@ where exists (
   where jobname = 'dispatch-hourly-generate'
 );
 
--- Run every hour at minute 0.
+-- Run every 30 minutes.
 select cron.schedule(
-  'dispatch-hourly-generate',
-  '0 * * * *',
+  'dispatch-30min-generate',
+  '*/30 * * * *',
   $$
     select net.http_get(
       url := '<YOUR_VERCEL_APP_URL>/api/cron/generate',

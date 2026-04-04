@@ -1,5 +1,5 @@
 const NEWSDATA_BASE_URL = 'https://newsdata.io/api/1'
-const ONE_HOUR_MS = 60 * 60 * 1000
+const THIRTY_MINUTES_MS = 30 * 60 * 1000
 
 type CachedTopics = {
   topics: string[]
@@ -29,7 +29,7 @@ export async function getTopics(): Promise<string[]> {
   const now = Date.now()
   const cache = globalForNewsData.__dispatchNewsDataCache
 
-  if (cache && now - cache.fetchedAt < ONE_HOUR_MS && cache.topics.length > 0) {
+  if (cache && now - cache.fetchedAt < THIRTY_MINUTES_MS && cache.topics.length > 0) {
     return cache.topics
   }
 
@@ -45,7 +45,7 @@ export async function getTopics(): Promise<string[]> {
     url.searchParams.set('category', 'world,technology,business,science')
 
     const response = await fetch(url.toString(), {
-      next: { revalidate: 3600 },
+      next: { revalidate: 1800 },
     })
 
     if (!response.ok) {
@@ -102,7 +102,7 @@ export async function getTopicImageHint(topic: string): Promise<string | null> {
   const now = Date.now()
   const cache = globalForNewsData.__dispatchNewsDataCache
 
-  if (!cache || now - cache.fetchedAt >= ONE_HOUR_MS) {
+  if (!cache || now - cache.fetchedAt >= THIRTY_MINUTES_MS) {
     await getTopics()
   }
 
@@ -117,7 +117,7 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
 
   const now = Date.now()
   const cache = globalForNewsData.__dispatchNewsSearchCache?.[normalizedTopic]
-  if (cache && now - cache.fetchedAt < ONE_HOUR_MS && cache.results.length > 0) {
+  if (cache && now - cache.fetchedAt < THIRTY_MINUTES_MS && cache.results.length > 0) {
     return cache.results
   }
 
@@ -135,7 +135,7 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
     url.searchParams.set('size', '10')
 
     const response = await fetch(url.toString(), {
-      next: { revalidate: 3600 },
+      next: { revalidate: 1800 },
     })
 
     if (!response.ok) {
