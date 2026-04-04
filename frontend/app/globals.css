@@ -192,6 +192,6 @@
   }
   
   a {
-    @apply text-primary hover:text-primary/80 transition-colors underline;
+    @apply text-primary hover:text-primary/80 transition-colors no-underline hover:underline;
   }
 }
