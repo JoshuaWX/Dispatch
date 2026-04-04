@@ -11,8 +11,9 @@ import type {
   ResearchBrief,
 } from '@/lib/dispatch-types'
 import {
-  getArticleById,
+  getArticleByIdPersistent,
   getPipelineSnapshot,
+  listArticlesPersistent,
   listArticles,
   markPipelineDegraded,
   markPipelineIdle,
@@ -20,7 +21,7 @@ import {
   markPipelineSuccess,
   recordPipelineEvent,
   setPipelineState,
-  upsertArticle,
+  upsertArticlePersistent,
 } from '@/lib/store'
 import {
   ARTICLE_WRITER_PROMPT,
@@ -611,14 +612,14 @@ export async function getTrendDigest() {
   return getTopics()
 }
 
-export function getPublishedArticles() {
-  const articles = listArticles()
+export async function getPublishedArticles() {
+  const articles = await listArticlesPersistent()
   maybeTriggerAutonomousRun(articles.length)
   return articles
 }
 
-export function getPublishedArticle(articleId: string) {
-  return getArticleById(articleId)
+export async function getPublishedArticle(articleId: string) {
+  return getArticleByIdPersistent(articleId)
 }
 
 export function getPipelineStatus() {
@@ -790,7 +791,7 @@ export async function runPipeline(input: GenerateStoryInput) {
     }
 
     const article = await createArticleRecord(selectedTopic, research, draft, qualityScore)
-    upsertArticle(article)
+    await upsertArticlePersistent(article)
 
     setProgress('publish', 100, 'Published to newsroom feed')
     recordPipelineEvent({
@@ -823,7 +824,7 @@ export async function runPipeline(input: GenerateStoryInput) {
 }
 
 export async function answerReporterQuestion(body: QaRequestBody) {
-  const article = getArticleById(body.articleId)
+  const article = await getArticleByIdPersistent(body.articleId)
   if (!article) {
     return null
   }

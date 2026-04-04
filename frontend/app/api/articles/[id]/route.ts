@@ -6,7 +6,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const article = getPublishedArticle(id)
+  const article = await getPublishedArticle(id)
 
   if (!article) {
     return NextResponse.json({ error: 'Article not found' }, { status: 404 })

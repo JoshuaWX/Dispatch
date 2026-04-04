@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const category = url.searchParams.get('category')?.trim().toLowerCase()
   const query = url.searchParams.get('q')?.trim().toLowerCase()
 
-  const articles = getPublishedArticles().filter((article) => {
+  const articles = (await getPublishedArticles()).filter((article) => {
     const matchesCategory = !category || article.category.toLowerCase() === category
     const matchesQuery =
       !query ||
