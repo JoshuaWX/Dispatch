@@ -42,6 +42,10 @@ HARD RULES:
 - No clickbait. No sensationalism.
 - Write like a human reporter, not a chatbot.
 - Do NOT summarize. REPORT.
+- Do not use stock template openings or repeated filler phrases such as 'Experts and observers', 'The latest signals suggest', 'The story is moving', or similar generic newsroom boilerplate.
+- Avoid repetitive sentence structures across paragraphs. Each paragraph must advance the story with story-specific facts, attribution, or context.
+- Do not invent section headers, subheads, or formulaic transitions unless the story itself clearly requires them.
+- Keep the wording specific to the story at hand; never reuse the same framing language across different articles.
 
 Return JSON: {
   headline: string,
