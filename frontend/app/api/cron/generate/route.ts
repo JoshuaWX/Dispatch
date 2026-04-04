@@ -8,7 +8,22 @@ function isCronRequest(request: Request) {
     return true
   }
 
-  return request.headers.get('x-vercel-cron') === '1'
+  if (request.headers.get('x-vercel-cron') === '1') {
+    return true
+  }
+
+  const schedulerSecret = process.env.SCHEDULER_SECRET?.trim()
+  if (!schedulerSecret) {
+    return false
+  }
+
+  const authHeader = request.headers.get('authorization')?.trim()
+  if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
+    return false
+  }
+
+  const token = authHeader.slice(7).trim()
+  return token.length > 0 && token === schedulerSecret
 }
 
 export async function GET(request: Request) {
