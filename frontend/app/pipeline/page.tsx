@@ -391,7 +391,7 @@ export default function PipelinePage() {
             <ul className="space-y-3">
               {improvementBullets.map((bullet) => (
                 <li key={bullet} className="flex items-start gap-3">
-                  <span className="text-green-600 dark:text-green-400 mt-1">✓</span>
+                  <span className="text-foreground mt-1">✓</span>
                   <span className="text-sm text-foreground">{bullet}</span>
                 </li>
               ))}
@@ -405,7 +405,7 @@ export default function PipelinePage() {
             <ul className="space-y-3">
               {challengeBullets.map((bullet) => (
                 <li key={bullet} className="flex items-start gap-3">
-                  <span className="text-amber-600 dark:text-amber-400 mt-1">!</span>
+                  <span className="text-muted-foreground mt-1">!</span>
                   <span className="text-sm text-foreground">{bullet}</span>
                 </li>
               ))}

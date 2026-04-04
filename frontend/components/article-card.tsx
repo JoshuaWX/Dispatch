@@ -35,7 +35,7 @@ export function ArticleCard({
       <article
         className={`group cursor-pointer h-full transition-all duration-300 hover:shadow-lg rounded-lg overflow-hidden border border-border hover:border-primary/50 ${
           featured
-            ? 'bg-gradient-to-br from-accent/5 to-primary/5'
+            ? 'bg-linear-to-br from-primary/8 via-foreground/3 to-transparent'
             : 'bg-card hover:bg-muted/50'
         }`}
       >
@@ -50,7 +50,7 @@ export function ArticleCard({
               sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             />
             {featured && (
-              <div className="absolute inset-0 bg-gradient-to-t from-primary/30 to-transparent" />
+              <div className="absolute inset-0 bg-linear-to-t from-black/30 to-transparent dark:from-black/55" />
             )}
           </div>
         )}
@@ -72,7 +72,7 @@ export function ArticleCard({
             {title}
           </h3>
 
-          <p className="text-sm text-muted-foreground mb-4 line-clamp-2 flex-grow">
+          <p className="text-sm text-muted-foreground mb-4 line-clamp-2 grow">
             {description}
           </p>
 

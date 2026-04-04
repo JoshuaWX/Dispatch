@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Geist, Geist_Mono, Playfair_Display } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Header } from '@/components/layout/header'
@@ -8,6 +8,10 @@ import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const _playfair = Playfair_Display({
+  subsets: ['latin'],
+  variable: '--font-serif',
+})
 
 export const metadata: Metadata = {
   title: 'DISPATCH - AI-Native Autonomous Newsroom',
@@ -40,8 +44,8 @@ export const viewport: Viewport = {
   maximumScale: 5,
   userScalable: true,
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f8f7f5' },
-    { media: '(prefers-color-scheme: dark)', color: '#1a1917' },
+    { media: '(prefers-color-scheme: light)', color: '#f4f4f3' },
+    { media: '(prefers-color-scheme: dark)', color: '#111111' },
   ],
 }
 
@@ -52,7 +56,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="font-sans antialiased flex flex-col min-h-screen bg-background text-foreground">
+      <body className={`${_playfair.variable} font-sans antialiased flex flex-col min-h-screen bg-background text-foreground`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem enableColorScheme>
           <Header />
           <main className="grow">

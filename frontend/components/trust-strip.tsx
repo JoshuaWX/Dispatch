@@ -18,20 +18,20 @@ export function TrustStrip({
   const statusConfig = {
     verified: {
       icon: CheckCircle,
-      color: 'text-green-600 dark:text-green-400',
-      bg: 'bg-green-50 dark:bg-green-950',
+      color: 'text-primary',
+      bg: 'bg-primary/10',
       label: 'Verified',
     },
     pending: {
       icon: AlertCircle,
-      color: 'text-amber-600 dark:text-amber-400',
-      bg: 'bg-amber-50 dark:bg-amber-950',
+      color: 'text-foreground/85',
+      bg: 'bg-muted',
       label: 'Pending Review',
     },
     unverified: {
       icon: AlertCircle,
-      color: 'text-slate-600 dark:text-slate-400',
-      bg: 'bg-slate-50 dark:bg-slate-950',
+      color: 'text-muted-foreground',
+      bg: 'bg-muted/70',
       label: 'Unverified',
     },
   }
@@ -42,8 +42,8 @@ export function TrustStrip({
   return (
     <div className={`rounded-lg ${config.bg} p-4 border border-border`}>
       <div className="flex items-start gap-3">
-        <Icon className={`w-5 h-5 ${config.color} flex-shrink-0 mt-0.5`} />
-        <div className="flex-grow min-w-0">
+        <Icon className={`w-5 h-5 ${config.color} shrink-0 mt-0.5`} />
+        <div className="grow min-w-0">
           <div className="flex items-center gap-2 mb-2">
             <span className={`text-sm font-semibold ${config.color}`}>
               {config.label}

@@ -26,29 +26,29 @@ export interface PipelineFeedProps {
 const STAGE_CONFIG = {
   discovery: {
     icon: Clock,
-    color: 'text-blue-600 dark:text-blue-400',
-    bg: 'bg-blue-50 dark:bg-blue-950',
+    color: 'text-primary',
+    bg: 'bg-primary/10',
     label: 'Discovery',
     description: 'Story being researched',
   },
   verification: {
     icon: AlertCircle,
-    color: 'text-amber-600 dark:text-amber-400',
-    bg: 'bg-amber-50 dark:bg-amber-950',
+    color: 'text-foreground/85',
+    bg: 'bg-foreground/10',
     label: 'Verification',
     description: 'Sources being confirmed',
   },
   analysis: {
     icon: Database,
-    color: 'text-purple-600 dark:text-purple-400',
-    bg: 'bg-purple-50 dark:bg-purple-950',
+    color: 'text-muted-foreground',
+    bg: 'bg-muted/80',
     label: 'Analysis',
     description: 'Content being analyzed',
   },
   published: {
     icon: CheckCircle,
-    color: 'text-green-600 dark:text-green-400',
-    bg: 'bg-green-50 dark:bg-green-950',
+    color: 'text-primary',
+    bg: 'bg-primary/10',
     label: 'Published',
     description: 'Story published',
   },
@@ -117,18 +117,18 @@ export function PipelineFeed({ stories }: PipelineFeedProps) {
               <div className="flex items-start gap-4">
                 {/* Stage Icon */}
                 <div
-                  className={`p-2.5 rounded-lg ${stageConfig.bg} flex-shrink-0`}
+                  className={`p-2.5 rounded-lg ${stageConfig.bg} shrink-0`}
                 >
                   <Icon className={`w-5 h-5 ${stageConfig.color}`} />
                 </div>
 
                 {/* Content */}
-                <div className="flex-grow min-w-0">
+                <div className="grow min-w-0">
                   <div className="flex items-start gap-2 mb-2">
                     <h4 className="font-semibold text-foreground line-clamp-1">
                       {story.title}
                     </h4>
-                    <Badge variant="outline" className="text-xs flex-shrink-0">
+                    <Badge variant="outline" className="text-xs shrink-0">
                       {story.category}
                     </Badge>
                   </div>

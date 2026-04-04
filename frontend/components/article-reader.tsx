@@ -355,7 +355,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
               </div>
 
               {/* Newsletter CTA */}
-              <div className="bg-linear-to-br from-primary/10 to-accent/10 rounded-lg border border-border p-6">
+              <div className="bg-linear-to-br from-primary/8 via-foreground/3 to-transparent rounded-lg border border-border p-6">
                 <h3 className="text-sm font-semibold text-foreground mb-2">
                   Subscribe to Updates
                 </h3>

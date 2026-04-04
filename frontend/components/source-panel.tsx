@@ -19,10 +19,9 @@ export interface SourcePanelProps {
 
 export function SourcePanel({ sources, title = 'Sources' }: SourcePanelProps) {
   const reliabilityConfig = {
-    high: 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-400',
-    medium:
-      'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400',
-    low: 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-400',
+    high: 'bg-primary/10 text-primary',
+    medium: 'bg-muted text-muted-foreground',
+    low: 'bg-foreground/15 text-foreground',
   }
 
   return (
@@ -34,7 +33,7 @@ export function SourcePanel({ sources, title = 'Sources' }: SourcePanelProps) {
           <div key={source.id} className="pb-4 border-b border-border last:border-0">
             <div className="flex items-start gap-3 mb-3">
               {source.logo && (
-                <div className="relative w-8 h-8 flex-shrink-0 bg-muted rounded">
+                <div className="relative w-8 h-8 shrink-0 bg-muted rounded">
                   <Image
                     src={source.logo}
                     alt={source.name}
@@ -44,7 +43,7 @@ export function SourcePanel({ sources, title = 'Sources' }: SourcePanelProps) {
                   />
                 </div>
               )}
-              <div className="flex-grow min-w-0">
+              <div className="grow min-w-0">
                 <p className="text-sm font-medium text-foreground">{source.name}</p>
                 <p className="text-xs text-muted-foreground">{source.publishedAt}</p>
               </div>

@@ -200,7 +200,7 @@ export function HomePage() {
         </div>
       </section>
 
-      <section className="bg-linear-to-br from-primary/10 to-accent/10 border-t border-border py-12 sm:py-16">
+      <section className="bg-linear-to-br from-primary/10 via-foreground/3 to-transparent border-t border-border py-12 sm:py-16">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Get News You Can Trust</h2>
           <p className="text-lg text-muted-foreground mb-8">

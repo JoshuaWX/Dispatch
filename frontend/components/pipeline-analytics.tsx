@@ -39,9 +39,7 @@ export function AnalyticsStats({ stats }: AnalyticsStatsProps) {
               {stat.change !== undefined && (
                 <p
                   className={`text-xs mt-2 ${
-                    stat.change > 0
-                      ? 'text-green-600 dark:text-green-400'
-                      : 'text-red-600 dark:text-red-400'
+                    stat.change > 0 ? 'text-primary' : 'text-muted-foreground'
                   }`}
                 >
                   {stat.change > 0 ? '+' : ''}{stat.change}% this week
@@ -82,11 +80,11 @@ export function PerformanceCharts({
   qualityMetrics,
 }: PerformanceChartsProps) {
   const COLORS = [
-    'hsl(var(--color-chart-1))',
-    'hsl(var(--color-chart-2))',
-    'hsl(var(--color-chart-3))',
-    'hsl(var(--color-chart-4))',
-    'hsl(var(--color-chart-5))',
+    'var(--color-chart-1)',
+    'var(--color-chart-2)',
+    'var(--color-chart-3)',
+    'var(--color-chart-4)',
+    'var(--color-chart-5)',
   ]
 
   return (
@@ -192,8 +190,8 @@ export function PerformanceCharts({
                   <span
                     className={`text-xs font-semibold px-2 py-1 rounded-full ${
                       metric.status === 'excellent'
-                        ? 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400'
-                        : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400'
+                        ? 'bg-foreground/10 text-foreground'
+                        : 'bg-muted text-muted-foreground'
                     }`}
                   >
                     {metric.status}
