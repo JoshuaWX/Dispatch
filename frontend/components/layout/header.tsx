@@ -42,7 +42,7 @@ export function Header() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-[4.5rem]">
+        <div className="flex items-center justify-between h-18">
           <Link href="/" className="flex items-center gap-3 no-underline hover:no-underline">
             <div className="bg-primary text-primary-foreground px-3 py-1.5 rounded-sm leading-none">
               <span className="text-base sm:text-lg font-black tracking-[0.18em]">DISPATCH</span>
@@ -55,19 +55,19 @@ export function Header() {
           <nav className="hidden md:flex items-center gap-6 lg:gap-8">
             <Link
               href="/"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-[10px]"
+              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
             >
               Front Page
             </Link>
             <Link
               href="/explore"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-[10px]"
+              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
             >
               Explore
             </Link>
             <Link
               href="/pipeline"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-[10px]"
+              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
             >
               Pipeline
             </Link>

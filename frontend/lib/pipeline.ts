@@ -106,7 +106,7 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
       .filter((fact) => fact && typeof fact === 'object')
       .map((fact) => {
         const typed = fact as { fact?: unknown; source?: unknown; confidence?: unknown }
-        const confidence =
+        const confidence: ResearchBrief['keyFacts'][number]['confidence'] =
           typed.confidence === 'confirmed' ||
           typed.confidence === 'reported' ||
           typed.confidence === 'alleged'
@@ -580,8 +580,8 @@ async function createArticleRecord(
     subheadline: draft.subheadline,
     lede: draft.lede,
     body,
-    imageUrl: visual.imageUrl,
-    imageCredit: visual.imageCredit,
+    imageUrl: visual?.imageUrl,
+    imageCredit: visual?.imageCredit,
     category: draft.category,
     tags: draft.tags,
     sources: buildSources(research),
