@@ -32,7 +32,9 @@ export async function GET(request: Request) {
   }
 
   try {
+    console.log('[CRON] Starting generation. AI_PROVIDER:', process.env.AI_PROVIDER || 'not set', 'GROQ_KEY present:', !!process.env.GROQ_API_KEY)
     const result = await runPipeline({})
+    console.log('[CRON] Result - published:', result.published, 'topic:', result.topic, 'research error:', result.research?.error)
     return NextResponse.json({
       ok: true,
       published: result.published,
@@ -40,6 +42,7 @@ export async function GET(request: Request) {
       articleId: result.article?.id ?? null,
     })
   } catch (error) {
+    console.error('[CRON] Error:', error instanceof Error ? error.message : 'Unknown error')
     return NextResponse.json(
       {
         ok: false,

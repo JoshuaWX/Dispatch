@@ -600,39 +600,41 @@ function buildSources(research: ResearchBrief): ArticleSource[] {
 async function callAnthropic(system: string, payload: object) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? ''
   if (!apiKey) {
-    return null
-  }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: DEFAULT_ANTHROPIC_MODEL,
-      max_tokens: 1800,
-      system,
-      messages: [
-        {
-          role: 'user',
-          content: JSON.stringify(payload),
-        },
-      ],
-    }),
-  })
-
-  if (!response.ok) {
-    console.warn(`Anthropic request failed with ${response.status}; falling back to local generation`)
+    console.log('[callAnthropic] No API key configured')
     return null
   }
 
   try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: DEFAULT_ANTHROPIC_MODEL,
+        max_tokens: 1800,
+        system,
+        messages: [
+          {
+            role: 'user',
+            content: JSON.stringify(payload),
+          },
+        ],
+      }),
+    })
+
+    if (!response.ok) {
+      console.warn(`[callAnthropic] Failed with status ${response.status}, response:`, await response.text())
+      return null
+    }
+
     const json = await response.json()
     const text = json?.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
     return text || null
-  } catch {
+  } catch (error) {
+    console.error('[callAnthropic] Error:', error instanceof Error ? error.message : error)
     return null
   }
 }
@@ -640,51 +642,62 @@ async function callAnthropic(system: string, payload: object) {
 async function callGroq(system: string, payload: object) {
   const apiKey = process.env.GROQ_API_KEY ?? ''
   if (!apiKey) {
-    return null
-  }
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: DEFAULT_GROQ_MODEL,
-      temperature: 0.2,
-      max_tokens: 1800,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: JSON.stringify(payload) },
-      ],
-    }),
-  })
-
-  if (!response.ok) {
-    console.warn(`Groq request failed with ${response.status}; falling back to local generation`)
+    console.log('[callGroq] No API key configured')
     return null
   }
 
   try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: DEFAULT_GROQ_MODEL,
+        temperature: 0.2,
+        max_tokens: 1800,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: JSON.stringify(payload) },
+        ],
+      }),
+    })
+
+    if (!response.ok) {
+      console.warn(`[callGroq] Failed with status ${response.status}, response:`, await response.text())
+      return null
+    }
+
     const json = await response.json()
     const text = json?.choices?.[0]?.message?.content
     return typeof text === 'string' && text.trim() ? text : null
-  } catch {
+  } catch (error) {
+    console.error('[callGroq] Error:', error instanceof Error ? error.message : error)
     return null
   }
 }
 
 async function callModel(system: string, payload: object) {
   if (AI_PROVIDER === 'anthropic') {
+    console.log('[callModel] Using Anthropic')
     return callAnthropic(system, payload)
   }
 
   if (AI_PROVIDER === 'groq') {
+    console.log('[callModel] Using Groq')
     return callGroq(system, payload)
   }
 
   // Auto mode: prefer Groq if available, then Anthropic.
-  return (await callGroq(system, payload)) ?? callAnthropic(system, payload)
+  console.log('[callModel] Auto mode: trying Groq first')
+  const groqResult = await callGroq(system, payload)
+  if (groqResult) {
+    console.log('[callModel] Groq succeeded')
+    return groqResult
+  }
+  console.log('[callModel] Groq failed, trying Anthropic')
+  return callAnthropic(system, payload)
 }
 
 async function createArticleRecord(
