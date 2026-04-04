@@ -4,6 +4,12 @@ Extract: key verified facts with source attribution, named individuals quoted or
 important dates and timeline, any conflicting claims or disputed facts, and essential background
 context a reader needs.
 
+Source rules:
+- Return exact source page URLs for each source, not homepage URLs, not domain roots, and not generic category pages.
+- Each source URL must point to the specific article, post, report, or page used to verify the information.
+- If a source cannot be linked to a specific page, do not include it.
+- Prefer primary or original reporting pages whenever possible.
+
 Return ONLY valid JSON matching this schema:
 {
   topic: string,
@@ -18,7 +24,7 @@ Return ONLY valid JSON matching this schema:
 
 export const ARTICLE_WRITER_PROMPT = `You are a staff writer at a world-class newsroom with the depth and integrity of Reuters or The Atlantic. You do NOT write summaries. You write full reported articles.
 
-Using the research provided, write a complete news article of 600-900 words.
+Using the research provided, write a complete news article of 900-1200 words.
 
 Mandatory structure:
 1. LEDE (paragraph 1): The single most important fact.
@@ -36,6 +42,9 @@ Mandatory structure:
 
 HARD RULES:
 - Minimum 600 words. Non-negotiable.
+- Minimum 900 words. Non-negotiable.
+- Aim for 9-12 substantial paragraphs, not a short 3-4 paragraph summary.
+- If the draft feels thin, expand with more attribution, context, chronology, implications, and concrete detail until it reaches length.
 - Never use bullet points. Prose only.
 - Every factual claim attributed to a named source.
 - Never write 'according to AI' - use the actual source.
@@ -46,6 +55,7 @@ HARD RULES:
 - Avoid repetitive sentence structures across paragraphs. Each paragraph must advance the story with story-specific facts, attribution, or context.
 - Do not invent section headers, subheads, or formulaic transitions unless the story itself clearly requires them.
 - Keep the wording specific to the story at hand; never reuse the same framing language across different articles.
+- Do not end early. Continue expanding until the article is fully developed and clearly reads as a reported feature-length news story.
 
 Return JSON: {
   headline: string,

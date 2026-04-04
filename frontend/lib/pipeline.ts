@@ -73,6 +73,28 @@ function isArticleCategory(value: unknown): value is ArticleCategory {
   return value === 'World' || value === 'Tech' || value === 'Business' || value === 'Science'
 }
 
+function isSpecificSourceUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return false
+    }
+
+    const pathname = parsed.pathname.replace(/\/+$/g, '')
+    if (!pathname || pathname === '') {
+      return false
+    }
+
+    if (pathname === '/' || pathname === '/news' || pathname === '/news/' || pathname === '/blog' || pathname === '/blog/') {
+      return false
+    }
+
+    return pathname.split('/').filter(Boolean).length >= 2
+  } catch {
+    return false
+  }
+}
+
 function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -92,15 +114,18 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
       .filter((source) => source && typeof source === 'object')
       .map((source) => {
         const typed = source as { name?: unknown; url?: unknown; credibilityNotes?: unknown }
+        const rawUrl = typeof typed.url === 'string' ? typed.url.trim() : ''
+        const url = isSpecificSourceUrl(rawUrl) ? rawUrl : ''
         return {
           name: typeof typed.name === 'string' ? typed.name : 'Unknown source',
-          url: typeof typed.url === 'string' ? typed.url : 'https://example.com',
+          url: url || 'https://example.com',
           credibilityNotes:
             typeof typed.credibilityNotes === 'string'
               ? typed.credibilityNotes
               : 'Credibility context unavailable.',
         }
       })
+      .filter((source) => source.url !== 'https://example.com')
       .slice(0, 6),
     keyFacts: input.keyFacts
       .filter((fact) => fact && typeof fact === 'object')
