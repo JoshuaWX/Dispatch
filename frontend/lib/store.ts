@@ -135,6 +135,11 @@ function loadPersistedArticles(): PublishedArticle[] {
 }
 
 function persistArticles(articles: PublishedArticle[]) {
+  // Skip disk persistence in serverless environments (Vercel, etc.)
+  if (process.env.VERCEL || !process.env.SUPABASE_URL) {
+    return
+  }
+
   try {
     mkdirSync(PERSISTENCE_DIR, { recursive: true })
     writeFileSync(PERSISTENCE_FILE, JSON.stringify(articles, null, 2), 'utf8')

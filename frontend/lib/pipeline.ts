@@ -905,39 +905,66 @@ export async function runPipeline(input: GenerateStoryInput) {
     throw new Error('No topic available. Provide a topic or configure a trends source.')
   }
 
-  markPipelineRunning(selectedTopic)
+  return processTopic(selectedTopic, input, topics, new Set())
+}
+
+async function processTopic(
+  topic: string,
+  input: GenerateStoryInput,
+  allTopics: string[],
+  attemptedTopics: Set<string>,
+  retryCount = 0
+) {
+  if (retryCount > 2) {
+    markPipelineDegraded(`Unable to find publishable content after trying ${retryCount} topics`)
+    return {
+      published: false,
+      topic,
+      research: { error: 'insufficient_data' as const },
+      draft: null,
+      qualityScore: null,
+      article: null,
+    }
+  }
+
+  const currentTopic = topic || chooseRandomTopic(allTopics.filter((t) => !attemptedTopics.has(t)))
+  if (!currentTopic) {
+    throw new Error('No topics available for processing.')
+  }
+
+  attemptedTopics.add(currentTopic)
+
+  markPipelineRunning(currentTopic)
   recordPipelineEvent({
     stage: 'trend-intake',
     status: 'processing',
-    articleTitle: selectedTopic,
+    articleTitle: currentTopic,
     details: 'Topic selected from NewsData topics feed and queued for research.',
   })
 
   try {
-    setProgress('research', 25, `Researching ${selectedTopic}`)
-    const research = await researchTopic(selectedTopic)
+    setProgress('research', 25, `Researching ${currentTopic}`)
+    const research = await researchTopic(currentTopic)
     if (!isResearchBrief(research)) {
       recordPipelineEvent({
         stage: 'research',
         status: 'failed',
-        articleTitle: selectedTopic,
-        details: 'Insufficient real-world sources were found, so the topic was skipped.',
+        articleTitle: currentTopic,
+        details: 'Insufficient real-world sources were found, trying a different topic.',
       })
-      markPipelineDegraded(`Insufficient data for ${selectedTopic}`)
-      return {
-        published: false,
-        topic: selectedTopic,
-        research,
-        draft: null,
-        qualityScore: null,
-        article: null,
-      }
+      console.log(
+        `[runPipeline] Research failed for "${currentTopic}", retrying with different topic (attempt ${retryCount + 1}/3)`
+      )
+
+      // Pick a fresh topic and retry
+      const nextTopic = chooseRandomTopic(allTopics.filter((t) => !attemptedTopics.has(t)))
+      return processTopic(input.topic ? '' : nextTopic, input, allTopics, attemptedTopics, retryCount + 1)
     }
 
     recordPipelineEvent({
       stage: 'research',
       status: 'completed',
-      articleTitle: selectedTopic,
+      articleTitle: currentTopic,
       details: `Collected ${research.sources.length} sources and key facts.`,
     })
 
@@ -947,13 +974,13 @@ export async function runPipeline(input: GenerateStoryInput) {
       recordPipelineEvent({
         stage: 'writing',
         status: 'failed',
-        articleTitle: selectedTopic,
+        articleTitle: currentTopic,
         details: 'Draft generation returned no publishable article.',
       })
-      markPipelineDegraded(`Draft generation failed for ${selectedTopic}`)
+      markPipelineDegraded(`Draft generation failed for ${currentTopic}`)
       return {
         published: false,
-        topic: selectedTopic,
+        topic: currentTopic,
         research,
         draft: null,
         qualityScore: null,
@@ -964,7 +991,7 @@ export async function runPipeline(input: GenerateStoryInput) {
     recordPipelineEvent({
       stage: 'writing',
       status: 'completed',
-      articleTitle: selectedTopic,
+      articleTitle: currentTopic,
       details: 'Generated newsroom-style lede, context, and body.',
     })
 
@@ -977,13 +1004,13 @@ export async function runPipeline(input: GenerateStoryInput) {
         recordPipelineEvent({
           stage: 'writing',
           status: 'failed',
-          articleTitle: selectedTopic,
+          articleTitle: currentTopic,
           details: 'Retry generation returned no publishable article.',
         })
-        markPipelineDegraded(`Retry generation failed for ${selectedTopic}`)
+        markPipelineDegraded(`Retry generation failed for ${currentTopic}`)
         return {
           published: false,
-          topic: selectedTopic,
+          topic: currentTopic,
           research,
           draft: null,
           qualityScore: null,
@@ -998,13 +1025,13 @@ export async function runPipeline(input: GenerateStoryInput) {
       recordPipelineEvent({
         stage: 'quality-gate',
         status: 'failed',
-        articleTitle: selectedTopic,
+        articleTitle: currentTopic,
         details: 'Article did not clear the quality threshold.',
       })
-      markPipelineDegraded(`Quality gate rejected ${selectedTopic}`)
+      markPipelineDegraded(`Quality gate rejected ${currentTopic}`)
       return {
         published: false,
-        topic: selectedTopic,
+        topic: currentTopic,
         research,
         draft,
         qualityScore,
@@ -1012,22 +1039,22 @@ export async function runPipeline(input: GenerateStoryInput) {
       }
     }
 
-    const article = await createArticleRecord(selectedTopic, research, draft, qualityScore)
+    const article = await createArticleRecord(currentTopic, research, draft, qualityScore)
     await upsertArticlePersistent(article)
 
     setProgress('publish', 100, 'Published to newsroom feed')
     recordPipelineEvent({
       stage: 'publish',
       status: 'completed',
-      articleTitle: selectedTopic,
+      articleTitle: currentTopic,
       details: 'Article published to the in-memory newsroom store.',
     })
 
-    markPipelineSuccess(selectedTopic)
+    markPipelineSuccess(currentTopic)
 
     return {
       published: true,
-      topic: selectedTopic,
+      topic: currentTopic,
       research,
       draft,
       qualityScore,
@@ -1037,10 +1064,10 @@ export async function runPipeline(input: GenerateStoryInput) {
     recordPipelineEvent({
       stage: 'research',
       status: 'failed',
-      articleTitle: selectedTopic,
+      articleTitle: currentTopic,
       details: error instanceof Error ? error.message : 'Unexpected pipeline failure',
     })
-    markPipelineDegraded(`Pipeline failed while processing ${selectedTopic}`)
+    markPipelineDegraded(`Pipeline failed while processing ${currentTopic}`)
     throw error
   }
 }
