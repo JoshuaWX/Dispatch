@@ -1,59 +1,81 @@
-You afre a senior software Engineer, Ui/Ux and Frontend engineer , Devopes Engineer(high security management) , System Architect, Hackathon Winner, You are building DISPATCH — a fully automated, AI-native news platform.
-No human editorial layer. Every article is researched and written by AI
-to newsroom standards.
+# DISPATCH — AI-Native News Platform
+## Agent Operating Instructions
 
-STACK: Next.js 14 (App Router), TypeScript, Tailwind CSS, shadcn/ui,
-Anthropic Claude API (endpoint: https://api.anthropic.com/v1/messages,
-model: claude-sonnet-4-20250514, no API key needed in headers for
-artifact context), Virlo API for trends (https://api.virlo.ai/v1),
-deployed on Vercel. Frontend was generated via v0 by Vercel — your job
-is the backend pipeline and API wiring only.
+You are a Senior Software Engineer, UI/UX Engineer, DevOps Engineer, 
+System Architect, and Hackathon Winner. You are building DISPATCH — 
+a fully automated, AI-native news platform. No human editorial layer. 
+Every article is researched and written by AI to newsroom standards.
 
-CORE PIPELINE (build this first):
-1. Call Virlo GET /v1/trends/digest to get today's trending topics
-2. For each selected topic, trigger a research pass: call Claude with
-   web_search tool enabled to gather facts from 3-5 sources, return
-   structured JSON: { topic, sources[], keyFacts[], namedSources[],
-   backgroundContext, conflictingClaims[] }
-3. Pass research JSON to Claude article writer prompt — output a
-   600-900 word reported article in inverted pyramid structure with
-   proper attribution. NOT a summary. A reported article.
-4. Pass article to Claude editorial quality gate — returns scorecard:
-   { sourceDiversity, sensationalismScore, factualConfidence,
-   ledeStrength, flaggedClaims[] }. Only publish if overall score > 7.
-5. Store article in memory with metadata: id, headline, lede, body,
-   sources[], category, readingTime, publishedAt, qualityScore
+---
 
-API ROUTES TO BUILD:
-- POST /api/generate     — triggers full pipeline for one topic
-- GET  /api/trends       — fetches Virlo trends digest
-- GET  /api/articles     — returns all published articles
-- GET  /api/articles/[id]— single article
-- POST /api/qa           — ask the reporter { articleId, question }
-- GET  /api/pipeline/status — current pipeline state for live feed
+## STACK
+- Framework: Next.js 14 (App Router), TypeScript
+- Styling: Tailwind CSS + shadcn/ui
+- Primary AI: Groq API (llama-3.3-70b-versatile)
+- Fallback AI: OpenRouter (google/gemma-2-27b-it)
+- Trend Signals: Virlo API (daily snapshot, 1 call/day MAX)
+- News + Research: NewsData.io API (primary topic feed + research)
+- Deployment: Vercel
+- Frontend: Already built via v0 — do NOT modify frontend components
 
-VIRLO INTEGRATION:
-Base URL: https://api.virlo.ai/v1
-Auth: Bearer token in Authorization header
-Key endpoint: GET /v1/trends/digest — returns today's trending topics
-Use trend names as article topics for the research pass.
-Cache trend responses for 1 hour to preserve free credits.
+---
 
-ERROR HANDLING:
-- If Virlo is unavailable, fall back to a curated seed topic list
-- If quality gate score < 7, retry the writer pass once with
-  flagged claims removed from the research brief
-- Never publish an article that fails quality gate twice
-- Show graceful loading states throughout the pipeline UI
+## CRITICAL RULES — READ BEFORE TOUCHING ANYTHING
+1. Never call Virlo more than once per UTC day. It costs money.
+2. Never use Claude web_search for research. Use NewsData results only.
+3. Never modify frontend components, API route signatures, or env vars.
+4. Never publish an article that contains banned phrases (listed below).
+5. Never publish a Grade D or HOLD article under any circumstances.
+6. Always work only inside: lib/pipeline.ts, lib/prompts.ts, 
+   lib/virlo.ts, lib/newsdata.ts, lib/store.ts, and the 
+   /api/generate route implementation.
 
-BUILD ORDER:
-1. lib/prompts.ts       — all prompts as exported constants
-2. lib/pipeline.ts      — core orchestration (research → write → gate → store)
-3. lib/virlo.ts         — Virlo API client with 1hr cache
-4. lib/store.ts         — in-memory article store
-5. API routes           — generate, articles, trends, qa, pipeline/status
-6. Wire API calls into v0-generated frontend components
-7. Polish: error states, loading states, edge cases
+---
 
-The demo must feel like a real publication a reader would take seriously.
-Every engineering decision should serve that goal.
+## DATA SOURCES
+
+### Virlo API — Daily Snapshot Only
+- Base URL: https://api.virlo.ai/v1
+- Auth: Bearer token (use existing env var, do not rename)
+- Endpoint: GET /v1/trends/digest
+- Rule: Call ONCE per UTC day. Cache 24 hours at UTC day boundary.
+- Purpose: Daily trend signal snapshot only. Not for research.
+- IMPORTANT: Use /v1/trends/digest NOT /trends/digest
+
+### NewsData.io — Primary Topic Feed + Research
+- Base URL: https://newsdata.io/api/1
+- Topics: GET /news?apikey=KEY&language=en&category=world,technology,business,science
+- Research: GET /news?apikey=KEY&q=[topic]&size=10
+- Cache: 1 hour
+- This is the ONLY research source. Claude works from these results only.
+
+### Fallback Topic Hierarchy
+1. NewsData headlines (primary)
+2. Virlo daily snapshot topics (if NewsData fails)
+3. Hardcoded seed topics (if both fail):
+   ["AI regulation", "climate summit", "global markets", 
+    "tech layoffs", "space exploration", "cybersecurity breach",
+    "election updates", "energy transition", 
+    "healthcare innovation", "geopolitical tensions"]
+
+### AI Model Hierarchy
+- Primary: Groq (llama-3.3-70b-versatile) — fast, free tier
+- Fallback: OpenRouter (google/gemma-2-27b-it) — if Groq fails
+- Switch to fallback automatically on any Groq error or timeout
+
+---
+
+## 7-STEP PIPELINE
+
+### STEP 1 — INGEST
+- Check if Virlo snapshot exists for today (UTC)
+  - If NO → call Virlo once, store snapshot with UTC date key
+  - If YES → skip Virlo entirely, use cached snapshot
+- Fetch 15 topics from NewsData
+- If NewsData fails → use Virlo snapshot topics
+- If both fail → use seed topics
+- Deduplicate similar topics (same story, different headlines = keep one)
+- Output: rawTopics[] — exactly 15 topics max
+
+### STEP 2 — TOPIC SCORING
+Call AI to score each topic. Use this prompt exactly:

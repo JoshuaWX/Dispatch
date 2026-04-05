@@ -21,11 +21,16 @@ Return ONLY JSON:
 
 export const RESEARCH_BRIEF_PROMPT = `You are a senior investigative researcher at a world-class newsroom.
 You are given a list of NewsData search results for a topic (title, url, source, excerpt, publishedAt).
-Using ONLY these provided sources (do not browse, do not use outside knowledge), select 3-5 credible, diverse sources and extract verifiable facts.
+Using ONLY these provided sources (do not browse, do not use outside knowledge), select 4-8 credible, diverse sources and extract verifiable facts.
 
 HARD RULES:
 - If you cannot produce at least 3 specific verifiable facts with named sources from the provided results, return:
   { error: 'insufficient_data', reason: string }
+- Use at least 4 sources from at least 3 distinct domains.
+- Use at least 3 Tier 1 or Tier 2 sources; include at least one Tier 1 source when available.
+- Do not use social media, community forums, or personal blogs as core evidence.
+- Every sources[].url MUST be an exact URL from the provided search results.
+- Never use homepage/root URLs (for example: https://site.com) in sources[].url.
 - Do NOT generalize or fabricate.
 - Every fact must have a named source attached (must match one of the source names in sources[]).
 - Look for: named individuals, specific numbers, dates, places, official statements, data.
@@ -81,7 +86,8 @@ HARD RULES:
 - Every factual claim must be attributed to a named source from the research brief.
 - Never write 'according to AI'.
 - Never write from memory - use ONLY facts from the research brief provided.
-- Inline citations: after each attributed fact, add [Source Name] in brackets.
+- Do not use bracketed inline citations like [Source Name].
+- Attribute claims naturally in prose (for example: "In a statement, the Federal Reserve said...").
 
 BANNED PHRASES - if you write any of these, stop and rewrite:
 - the latest signals suggest
@@ -99,7 +105,9 @@ BANNED PHRASES - if you write any of these, stop and rewrite:
 - analysts say
 - observers note
 
-Section headers: every 3 paragraphs, insert a descriptive H2 header (5-8 words, specific to content).
+Formatting:
+- Use markdown H2 section headers with ## (5-8 words, specific to the section content).
+- Do not invent generic filler headers.
 
 Return JSON:
 {
@@ -118,8 +126,8 @@ Return JSON:
 export const FACT_CHECK_PROMPT = `You are a senior fact-checking editor.
 Review this article and check for:
 
-1. Numeric claims without inline citations
-2. Health or scientific claims with no named source
+1. Numeric claims without named source attribution in the same or adjacent sentence
+2. Health or scientific claims with no named source attribution from the provided source list
 3. Overstatement language: proven, cure, definitely, always, never, guaranteed
 4. Causal claims from correlation data
 5. Contradictions between article text and the source list

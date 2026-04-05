@@ -24,6 +24,7 @@ import {
 import {
   ARTICLE_WRITER_PROMPT,
   FACT_CHECK_PROMPT,
+  QUALITY_GATE_PROMPT,
   QA_PROMPT,
   RESEARCH_BRIEF_PROMPT,
   TOPIC_SCORING_PROMPT,
@@ -41,6 +42,12 @@ const RAW_TOPIC_LIMIT = 15
 const MIN_TOPIC_SCORE = 60
 const MAX_RESEARCH_TOPICS = 5
 const MIN_KEY_FACTS = 3
+const MIN_RESEARCH_SOURCES = 4
+const MAX_RESEARCH_SOURCES = 8
+const MIN_DISTINCT_SOURCE_DOMAINS = 3
+const MIN_CREDIBLE_SOURCES = 3
+const MAX_TIER_THREE_SOURCE_RATIO = 0.5
+const MAX_SOURCES_PER_DOMAIN = 2
 const MIN_ARTICLE_WORDS = 650
 const MAX_WRITER_RETRIES = 2
 const STRICT_DEDUPE_SIMILARITY = 0.86
@@ -77,6 +84,10 @@ const BANNED_PHRASES = [
   'sources indicate',
   'analysts say',
   'observers note',
+  'satan worshipping',
+  'child sacrificing',
+  'traitor globalists',
+  'global currency reset',
 ]
 
 const OVERSTATEMENT_TERMS = ['proven', 'cure', 'definitely', 'always', 'never', 'guaranteed']
@@ -138,6 +149,74 @@ const CONFLICT_TERM_PAIRS: Array<[string, string]> = [
   ['expanding', 'shrinking'],
   ['gain', 'loss'],
   ['surplus', 'deficit'],
+]
+
+const LOW_CREDIBILITY_SOURCE_HINTS = [
+  'reddit.com',
+  'x.com',
+  'twitter.com',
+  'facebook.com',
+  'instagram.com',
+  'tiktok.com',
+  'youtube.com',
+  'rumble.com',
+  'blogspot.com',
+  'medium.com',
+  'substack.com',
+  'wordpress.com',
+  'quora.com',
+  'pinterest.com',
+  'discord.com',
+  'telegram.me',
+  '4chan.org',
+  'hoax',
+  'rumor',
+]
+
+const TIER_ONE_SOURCE_HINTS = [
+  'reuters',
+  'associated press',
+  'apnews.com',
+  'afp',
+  '.gov',
+  '.mil',
+  'europa.eu',
+  'un.org',
+  'who.int',
+  'oecd.org',
+  'imf.org',
+  'worldbank.org',
+  'federalreserve.gov',
+  'sec.gov',
+  'cdc.gov',
+  'nih.gov',
+  'nasa.gov',
+  'noaa.gov',
+]
+
+const TIER_TWO_SOURCE_HINTS = [
+  'bbc',
+  'financial times',
+  'ft.com',
+  'bloomberg',
+  'wsj',
+  'theguardian',
+  'nytimes',
+  'washingtonpost',
+  'economist',
+  'npr',
+  'cnbc',
+  'aljazeera',
+  'nature.com',
+  'science.org',
+  'lancet.com',
+  'jamanetwork.com',
+  'nejm.org',
+  '.edu',
+  'university',
+  'hospital',
+  'ministry',
+  'centralbank',
 ]
 
 type SourceTier = 1 | 2 | 3
@@ -230,6 +309,11 @@ type WriterResult = {
   usedDeterministicFallback?: boolean
 }
 
+type QualityGateOutcome = {
+  qualityScore: QualityScore | null
+  reason?: string
+}
+
 const globalForPipeline = globalThis as typeof globalThis & {
   __dispatchAutoRunPromise?: Promise<void>
 }
@@ -275,6 +359,314 @@ function normalizeForCompare(value: string) {
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function getSourceDomain(value: string) {
+  try {
+    const parsed = new URL(value)
+    return parsed.hostname.replace(/^www\./, '').toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function normalizeSourceUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    parsed.hash = ''
+
+    const keysToDrop: string[] = []
+    for (const key of parsed.searchParams.keys()) {
+      if (/^utm_/i.test(key)) {
+        keysToDrop.push(key)
+      }
+    }
+
+    for (const key of keysToDrop) {
+      parsed.searchParams.delete(key)
+    }
+
+    const pathname = parsed.pathname.replace(/\/+$/g, '') || '/'
+    const query = parsed.searchParams.toString()
+    const normalized = `${parsed.protocol}//${parsed.hostname.toLowerCase()}${pathname}${
+      query ? `?${query}` : ''
+    }`
+
+    return normalized
+  } catch {
+    return value.trim()
+  }
+}
+
+function sourceNamesLikelyMatch(left: string, right: string) {
+  const normalizedLeft = normalizeForCompare(left)
+  const normalizedRight = normalizeForCompare(right)
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false
+  }
+
+  if (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft)
+  ) {
+    return true
+  }
+
+  const leftTokens = sourceNameTokens(normalizedLeft)
+  const rightTokens = sourceNameTokens(normalizedRight)
+  return setIntersectionCount(leftTokens, rightTokens) >= 1
+}
+
+function isEligibleSearchHitSource(hit: NewsSearchHit) {
+  return Boolean(
+    hit.url && isSpecificSourceUrl(hit.url) && !isLowCredibilitySource(hit.source, hit.url)
+  )
+}
+
+function findBestSearchHitForSource(
+  sourceName: string,
+  sourceUrl: string,
+  searchHits: NewsSearchHit[]
+) {
+  const targetName = sourceName.trim()
+  const targetDomain = getSourceDomain(sourceUrl)
+  const normalizedTargetUrl = normalizeSourceUrl(sourceUrl)
+
+  let bestMatch: { hit: NewsSearchHit; score: number } | null = null
+
+  for (const hit of searchHits) {
+    if (!isEligibleSearchHitSource(hit)) {
+      continue
+    }
+
+    const normalizedHitUrl = normalizeSourceUrl(hit.url)
+    const hitDomain = getSourceDomain(hit.url)
+    let score = 0
+
+    if (targetName && sourceNamesLikelyMatch(targetName, hit.source)) {
+      score += 5
+    }
+
+    if (targetDomain && hitDomain && targetDomain === hitDomain) {
+      score += 4
+    }
+
+    if (normalizedTargetUrl && normalizedTargetUrl === normalizedHitUrl) {
+      score += 6
+    }
+
+    if (hit.excerpt.trim().length >= 80) {
+      score += 1
+    }
+
+    if (score < 4) {
+      continue
+    }
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { hit, score }
+    }
+  }
+
+  return bestMatch?.hit ?? null
+}
+
+function isLowCredibilitySource(name: string, url: string) {
+  const lowerName = name.toLowerCase()
+  const lowerUrl = `${url.toLowerCase()} ${getSourceDomain(url)}`
+
+  return LOW_CREDIBILITY_SOURCE_HINTS.some(
+    (hint) => lowerName.includes(hint) || lowerUrl.includes(hint)
+  )
+}
+
+function dedupeAndBalanceSources(sources: ExtendedResearchSource[]) {
+  const unique = new Map<string, ExtendedResearchSource>()
+
+  for (const source of sources) {
+    const normalizedName = normalizeForCompare(source.name)
+    const normalizedUrl = normalizeForCompare(source.url)
+    if (!normalizedName || !normalizedUrl) {
+      continue
+    }
+
+    const key = `${normalizedName}|${normalizedUrl}`
+    if (!unique.has(key)) {
+      unique.set(key, source)
+    }
+  }
+
+  const sorted = Array.from(unique.values()).sort((left, right) => {
+    if (left.tier !== right.tier) {
+      return left.tier - right.tier
+    }
+
+    return right.credibilityNotes.length - left.credibilityNotes.length
+  })
+
+  const domainUsage = new Map<string, number>()
+  const balanced: ExtendedResearchSource[] = []
+
+  for (const source of sorted) {
+    const domain = getSourceDomain(source.url)
+    const usage = domainUsage.get(domain) ?? 0
+
+    if (domain && usage >= MAX_SOURCES_PER_DOMAIN) {
+      continue
+    }
+
+    balanced.push(source)
+
+    if (domain) {
+      domainUsage.set(domain, usage + 1)
+    }
+
+    if (balanced.length >= MAX_RESEARCH_SOURCES) {
+      break
+    }
+  }
+
+  return balanced
+}
+
+function hasMinimumSourceQuality(sources: ExtendedResearchSource[]) {
+  if (sources.length < MIN_RESEARCH_SOURCES) {
+    return false
+  }
+
+  const domains = new Set(
+    sources.map((source) => getSourceDomain(source.url)).filter(Boolean)
+  )
+
+  if (domains.size < MIN_DISTINCT_SOURCE_DOMAINS) {
+    return false
+  }
+
+  const credibleCount = sources.filter((source) => source.tier <= 2).length
+  if (credibleCount < MIN_CREDIBLE_SOURCES) {
+    return false
+  }
+
+  const tierThreeCount = sources.filter((source) => source.tier === 3).length
+  if (tierThreeCount / Math.max(1, sources.length) > MAX_TIER_THREE_SOURCE_RATIO) {
+    return false
+  }
+
+  return true
+}
+
+function sourceNameTokens(value: string) {
+  return new Set(
+    normalizeForCompare(value)
+      .split(' ')
+      .filter((token) => token.length >= 4)
+  )
+}
+
+function sourceMatchesFactSourceName(
+  factSourceName: string,
+  sources: ExtendedResearchSource[]
+) {
+  const normalizedFactSource = normalizeForCompare(factSourceName)
+  if (!normalizedFactSource) {
+    return false
+  }
+
+  const factTokens = sourceNameTokens(normalizedFactSource)
+
+  return sources.some((source) => {
+    const normalizedSourceName = normalizeForCompare(source.name)
+    if (!normalizedSourceName) {
+      return false
+    }
+
+    if (
+      normalizedFactSource === normalizedSourceName ||
+      normalizedFactSource.includes(normalizedSourceName) ||
+      normalizedSourceName.includes(normalizedFactSource)
+    ) {
+      return true
+    }
+
+    const domain = getSourceDomain(source.url)
+    if (domain && normalizedFactSource.includes(domain)) {
+      return true
+    }
+
+    const sourceTokens = sourceNameTokens(normalizedSourceName)
+    const sharedTokens = setIntersectionCount(factTokens, sourceTokens)
+    return sharedTokens >= 1
+  })
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function buildSourceReferencePatterns(sources: ExtendedResearchSource[]) {
+  const seen = new Set<string>()
+  const patterns: RegExp[] = []
+
+  const addPattern = (value: string) => {
+    const normalized = value.trim().toLowerCase()
+    if (!normalized || normalized.length < 3 || seen.has(normalized)) {
+      return
+    }
+
+    seen.add(normalized)
+    patterns.push(new RegExp(`\\b${escapeRegex(normalized).replace(/\\\s+/g, '\\s+')}\\b`, 'i'))
+  }
+
+  for (const source of sources) {
+    addPattern(source.name)
+
+    const domain = getSourceDomain(source.url)
+    if (!domain) {
+      continue
+    }
+
+    addPattern(domain)
+
+    const domainTokens = domain
+      .split('.')
+      .filter(
+        (token) =>
+          token.length >= 4 &&
+          !['com', 'org', 'net', 'gov', 'edu', 'co', 'uk', 'us', 'io', 'int'].includes(token)
+      )
+
+    for (const token of domainTokens) {
+      addPattern(token)
+    }
+  }
+
+  return patterns
+}
+
+function hasNamedSourceAttribution(text: string, sourcePatterns: RegExp[]) {
+  if (!text.trim()) {
+    return false
+  }
+
+  return sourcePatterns.some((pattern) => pattern.test(text))
+}
+
+function countAttributedSentences(text: string, sourcePatterns: RegExp[]) {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+
+  let count = 0
+  for (const sentence of sentences) {
+    if (hasNamedSourceAttribution(sentence, sourcePatterns)) {
+      count += 1
+    }
+  }
+
+  return count
 }
 
 function tokenizeForSimilarity(value: string, minLength = 3) {
@@ -451,28 +843,21 @@ function normalizeSourceTier(value: unknown): SourceTier | null {
 
 function inferSourceTier(name: string, url: string): SourceTier {
   const lowerName = name.toLowerCase()
-  const lowerUrl = url.toLowerCase()
+  const domain = getSourceDomain(url)
+  const lowerUrl = `${url.toLowerCase()} ${domain}`
 
   if (
-    lowerName.includes('reuters') ||
-    lowerName.includes('associated press') ||
-    lowerName.includes('ap ') ||
-    lowerName.includes('afp') ||
-    lowerName.includes('government') ||
-    lowerUrl.includes('.gov/') ||
-    lowerUrl.includes('who.int/')
+    TIER_ONE_SOURCE_HINTS.some(
+      (hint) => lowerName.includes(hint) || lowerUrl.includes(hint)
+    )
   ) {
     return 1
   }
 
   if (
-    lowerName.includes('university') ||
-    lowerName.includes('hospital') ||
-    lowerName.includes('bbc') ||
-    lowerName.includes('financial times') ||
-    lowerName.includes('bloomberg') ||
-    lowerName.includes('wsj') ||
-    lowerName.includes('the verge')
+    TIER_TWO_SOURCE_HINTS.some(
+      (hint) => lowerName.includes(hint) || lowerUrl.includes(hint)
+    )
   ) {
     return 2
   }
@@ -565,6 +950,10 @@ function buildFallbackResearchBrief(
       continue
     }
 
+    if (isLowCredibilitySource(hit.source, hit.url)) {
+      continue
+    }
+
     const key = `${normalizeForCompare(hit.source)}|${normalizeForCompare(hit.url)}`
     if (sourceMap.has(key)) {
       continue
@@ -578,8 +967,8 @@ function buildFallbackResearchBrief(
     })
   }
 
-  const sources = Array.from(sourceMap.values()).slice(0, 5)
-  if (sources.length < MIN_KEY_FACTS) {
+  const sources = dedupeAndBalanceSources(Array.from(sourceMap.values()))
+  if (!hasMinimumSourceQuality(sources)) {
     return null
   }
 
@@ -654,6 +1043,12 @@ function normalizeResearchBrief(
   }
 
   const category = isArticleCategory(input.category) ? input.category : pickCategory(topic)
+  const eligibleSearchHits = searchHits.filter(isEligibleSearchHitSource)
+
+  const searchHitByUrl = new Map<string, NewsSearchHit>()
+  for (const hit of eligibleSearchHits) {
+    searchHitByUrl.set(normalizeSourceUrl(hit.url), hit)
+  }
 
   const sources = input.sources
     .filter((source) => source && typeof source === 'object')
@@ -668,24 +1063,46 @@ function normalizeResearchBrief(
       const name = typeof typed.name === 'string' ? typed.name.trim() : ''
       const url = typeof typed.url === 'string' ? typed.url.trim() : ''
 
-      if (!name || !url || !isSpecificSourceUrl(url)) {
+      if (!name && !url) {
         return null
       }
 
-      const tier = normalizeSourceTier(typed.tier) ?? inferSourceTier(name, url)
+      const normalizedUrl = normalizeSourceUrl(url)
+      const exactHit = normalizedUrl ? searchHitByUrl.get(normalizedUrl) ?? null : null
+
+      const matchedHit =
+        exactHit ?? findBestSearchHitForSource(name, url, eligibleSearchHits)
+
+      if (!matchedHit) {
+        return null
+      }
+
+      const resolvedName = matchedHit.source
+      const resolvedUrl = matchedHit.url
+
+      if (!resolvedName || !resolvedUrl || !isSpecificSourceUrl(resolvedUrl)) {
+        return null
+      }
+
+      if (isLowCredibilitySource(resolvedName, resolvedUrl)) {
+        return null
+      }
+
+      const tier = normalizeSourceTier(typed.tier) ?? inferSourceTier(resolvedName, resolvedUrl)
 
       return {
-        name,
-        url,
+        name: resolvedName,
+        url: resolvedUrl,
         tier,
         credibilityNotes:
           typeof typed.credibilityNotes === 'string' && typed.credibilityNotes.trim()
             ? typed.credibilityNotes.trim()
-            : `${name} coverage related to ${topic}`,
+            : matchedHit.excerpt || `${resolvedName} coverage related to ${topic}`,
       }
     })
     .filter((source): source is ExtendedResearchSource => Boolean(source))
-    .slice(0, 6)
+  
+  const balancedSources = dedupeAndBalanceSources(sources)
 
   const keyFacts = input.keyFacts
     .filter((fact) => fact && typeof fact === 'object')
@@ -710,7 +1127,13 @@ function normalizeResearchBrief(
         confidence,
       }
     })
-    .filter((fact): fact is ExtendedResearchBrief['keyFacts'][number] => Boolean(fact))
+    .filter((fact): fact is ExtendedResearchBrief['keyFacts'][number] => {
+      if (!fact) {
+        return false
+      }
+
+      return sourceMatchesFactSourceName(fact.source, balancedSources)
+    })
     .slice(0, 16)
 
   const namedSources = Array.isArray(input.namedSources)
@@ -771,16 +1194,20 @@ function normalizeResearchBrief(
         .slice(0, 8)
     : []
 
-  if (sources.length < MIN_KEY_FACTS || keyFacts.length < MIN_KEY_FACTS || !backgroundContext) {
+  if (!hasMinimumSourceQuality(balancedSources)) {
     return null
   }
 
-  const namedSourcesFallback = Array.from(new Set(sources.map((source) => source.name))).slice(0, 12)
+  if (keyFacts.length < MIN_KEY_FACTS || !backgroundContext) {
+    return null
+  }
+
+  const namedSourcesFallback = Array.from(new Set(balancedSources.map((source) => source.name))).slice(0, 12)
 
   const normalized: ExtendedResearchBrief = {
     topic: typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : topic,
     category,
-    sources,
+    sources: balancedSources,
     keyFacts,
     namedSources: namedSources.length > 0 ? namedSources : namedSourcesFallback,
     timeline,
@@ -1000,6 +1427,12 @@ function assignResearchGrade(research: ExtendedResearchBrief): GradeDecision {
   }
 
   const tierOneCount = research.sources.filter((source) => source.tier === 1).length
+  const tierTwoCount = research.sources.filter((source) => source.tier === 2).length
+  const credibleCount = tierOneCount + tierTwoCount
+  const distinctDomains = new Set(
+    research.sources.map((source) => getSourceDomain(source.url)).filter(Boolean)
+  ).size
+  const tierThreeCount = research.sources.filter((source) => source.tier === 3).length
   const corroborated = hasCorroboration(research)
   const unresolvedConflicts = hasUnresolvedConflicts(research)
 
@@ -1007,6 +1440,30 @@ function assignResearchGrade(research: ExtendedResearchBrief): GradeDecision {
     return {
       grade: 'HOLD',
       reason: 'Conflicting claims remain unresolved',
+      tierOneCount,
+      hasCorroboration: corroborated,
+      unresolvedConflicts,
+    }
+  }
+
+  if (
+    research.sources.length < MIN_RESEARCH_SOURCES ||
+    distinctDomains < MIN_DISTINCT_SOURCE_DOMAINS ||
+    credibleCount < MIN_CREDIBLE_SOURCES
+  ) {
+    return {
+      grade: 'D',
+      reason: 'Source quality threshold not met (need diverse and credible sourcing)',
+      tierOneCount,
+      hasCorroboration: corroborated,
+      unresolvedConflicts,
+    }
+  }
+
+  if (tierThreeCount / Math.max(1, research.sources.length) > MAX_TIER_THREE_SOURCE_RATIO) {
+    return {
+      grade: 'D',
+      reason: 'Too many low-confidence sources compared with primary/established reporting',
       tierOneCount,
       hasCorroboration: corroborated,
       unresolvedConflicts,
@@ -1032,9 +1489,19 @@ function assignResearchGrade(research: ExtendedResearchBrief): GradeDecision {
     }
   }
 
+  if (tierTwoCount >= MIN_CREDIBLE_SOURCES && corroborated) {
+    return {
+      grade: 'C',
+      note: 'No primary source, but corroborated across established reporting',
+      tierOneCount,
+      hasCorroboration: true,
+      unresolvedConflicts,
+    }
+  }
+
   return {
-    grade: 'C',
-    note: 'DEVELOPING STORY',
+    grade: 'D',
+    reason: 'Insufficient primary or corroborated established sourcing',
     tierOneCount,
     hasCorroboration: false,
     unresolvedConflicts,
@@ -1067,24 +1534,40 @@ function buildSources(research: ExtendedResearchBrief): ArticleSource[] {
   })
 }
 
-function buildQualityScore(
-  research: ExtendedResearchBrief,
-  draft: WriterDraft,
-  topicScore: TopicScoreCard,
-  grade: Grade,
-  factCheck: FactCheckResult
-): QualityScore {
-  const sourceDiversity = Number(Math.min(10, Math.max(4, research.sources.length * 1.8)).toFixed(1))
-  const sensationalism = factCheck.violations.length > 0 ? 4 : factCheck.warnings.length > 0 ? 8 : 9.5
-  const factualConfidence = grade === 'A' ? 9.5 : grade === 'B' ? 8.2 : 7.2
-  const ledeStrength = countWords(draft.lede) >= 18 ? 8.8 : 7.4
-  const topicalStrength = Number((topicScore.totalScore / 10).toFixed(1))
-  const overallScore = Number(
-    (
-      (sourceDiversity + sensationalism + factualConfidence + ledeStrength + topicalStrength) /
-      5
-    ).toFixed(1)
+function normalizeQualityScore(value: unknown): QualityScore | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const input = value as {
+    sourceDiversity?: unknown
+    sensationalism?: unknown
+    factualConfidence?: unknown
+    ledeStrength?: unknown
+    overallScore?: unknown
+    flaggedClaims?: unknown
+    publishRecommendation?: unknown
+  }
+
+  const sourceDiversity = clampScore(input.sourceDiversity, 0, 10, 0)
+  const sensationalism = clampScore(input.sensationalism, 0, 10, 0)
+  const factualConfidence = clampScore(input.factualConfidence, 0, 10, 0)
+  const ledeStrength = clampScore(input.ledeStrength, 0, 10, 0)
+  const averageScore = Number(
+    ((sourceDiversity + sensationalism + factualConfidence + ledeStrength) / 4).toFixed(1)
   )
+  const overallScore = clampScore(input.overallScore, 0, 10, averageScore)
+  const flaggedClaims = Array.isArray(input.flaggedClaims)
+    ? input.flaggedClaims
+        .filter((claim): claim is string => typeof claim === 'string' && Boolean(claim.trim()))
+        .map((claim) => claim.trim())
+        .slice(0, 20)
+    : []
+
+  const publishRecommendation =
+    typeof input.publishRecommendation === 'boolean'
+      ? input.publishRecommendation
+      : overallScore >= 7 && flaggedClaims.length === 0
 
   return {
     sourceDiversity,
@@ -1092,8 +1575,8 @@ function buildQualityScore(
     factualConfidence,
     ledeStrength,
     overallScore,
-    flaggedClaims: factCheck.violations.slice(0, 20),
-    publishRecommendation: factCheck.pass && overallScore >= 7,
+    flaggedClaims,
+    publishRecommendation,
   }
 }
 
@@ -1188,6 +1671,7 @@ async function callOpenRouter(system: string, payload: object) {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
+        'http-referer': 'https://dispatch.local',
         'x-title': 'DISPATCH',
       },
       body: JSON.stringify({
@@ -1201,13 +1685,66 @@ async function callOpenRouter(system: string, payload: object) {
       }),
     })
 
+    const responseText = await response.text()
+    let responseJson: unknown = null
+
+    if (responseText.trim()) {
+      try {
+        responseJson = JSON.parse(responseText)
+      } catch {
+        responseJson = null
+      }
+    }
+
     if (!response.ok) {
-      console.warn(`[callOpenRouter] failed with status ${response.status}`)
+      const errorMessage =
+        responseJson && typeof responseJson === 'object'
+          ? (() => {
+              const typed = responseJson as {
+                error?: { message?: unknown; code?: unknown }
+              }
+              const message = typed.error?.message
+              const code = typed.error?.code
+
+              const messagePart = typeof message === 'string' ? message.trim() : ''
+              const codePart = typeof code === 'string' ? code.trim() : ''
+
+              if (messagePart && codePart) {
+                return `${codePart}: ${messagePart}`
+              }
+
+              if (messagePart) {
+                return messagePart
+              }
+
+              if (codePart) {
+                return codePart
+              }
+
+              return null
+            })()
+          : null
+
+      if (errorMessage) {
+        console.warn(`[callOpenRouter] failed with status ${response.status}: ${errorMessage}`)
+      } else {
+        console.warn(`[callOpenRouter] failed with status ${response.status}`)
+      }
+
       return null
     }
 
-    const json = await response.json()
-    const content = json?.choices?.[0]?.message?.content
+    const json = responseJson as {
+      choices?: Array<{
+        message?: {
+          content?: unknown
+        }
+        text?: unknown
+      }>
+    } | null
+
+    const firstChoice = json?.choices?.[0]
+    const content = firstChoice?.message?.content
 
     if (typeof content === 'string') {
       const trimmed = content.trim()
@@ -1222,6 +1759,14 @@ async function callOpenRouter(system: string, payload: object) {
         .trim()
       return text || null
     }
+
+    const choiceText = firstChoice?.text
+    if (typeof choiceText === 'string') {
+      const trimmed = choiceText.trim()
+      return trimmed || null
+    }
+
+    console.warn('[callOpenRouter] response returned no usable message content')
 
     return null
   } catch (error) {
@@ -1259,7 +1804,18 @@ async function callModelWithProvider(system: string, payload: object): Promise<M
       }
     }
 
-    console.warn('[callModel] OpenRouter fallback returned no output')
+    console.warn('[callModel] OpenRouter fallback returned no output, trying Anthropic fallback')
+    const anthropicOutput = await callAnthropic(system, payload)
+
+    if (anthropicOutput) {
+      console.info('[callModel] Anthropic tertiary fallback produced output')
+      return {
+        output: anthropicOutput,
+        provider: 'anthropic',
+      }
+    }
+
+    console.warn('[callModel] Anthropic tertiary fallback returned no output')
     return {
       output: null,
       provider: null,
@@ -1439,26 +1995,46 @@ async function researchTopicInternal(
     }
   }
 
-  const modelOutput = await callModel(RESEARCH_BRIEF_PROMPT, {
+  const modelResult = await callModelWithProvider(RESEARCH_BRIEF_PROMPT, {
     topic,
     searchResults: searchHits,
   })
+  const modelOutput = modelResult.output
+  const modelProvider = modelResult.provider ?? 'none'
 
   const parsed = parseJsonObject<ExtendedResearchBrief | ResearchFailure>(modelOutput)
   if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+    console.warn(
+      `[research] model returned insufficient_data (provider=${modelProvider}): ${
+        typeof parsed.reason === 'string' ? parsed.reason : 'no reason provided'
+      }`
+    )
+
     return {
       error: 'insufficient_data',
       reason: typeof parsed.reason === 'string' ? parsed.reason : 'Research model reported insufficient data',
     }
   }
 
-  const normalized = normalizeResearchBrief(topic, parsed, searchHits)
-  const research = normalized ?? buildFallbackResearchBrief(topic, searchHits)
+  const research = normalizeResearchBrief(topic, parsed, searchHits)
 
   if (!research || research.keyFacts.length < MIN_KEY_FACTS) {
+    const rawOutputLength = modelOutput?.length ?? 0
+    const outputPreview =
+      typeof modelOutput === 'string'
+        ? modelOutput.replace(/\s+/g, ' ').trim().slice(0, 1200)
+        : 'no model output'
+
+    const parseState = parsed ? 'parsed-json-but-failed-validation' : 'invalid-json'
+
+    console.warn(
+      `[research] rejected model output (${parseState}, provider=${modelProvider}, chars=${rawOutputLength})`
+    )
+    console.warn(`[research] output preview: ${outputPreview}`)
+
     return {
       error: 'insufficient_data',
-      reason: 'Unable to produce 3 verifiable facts from NewsData results',
+      reason: 'Unable to validate research brief from model output',
     }
   }
 
@@ -1499,9 +2075,13 @@ function normalizeFactCheckResult(value: unknown): FactCheckResult | null {
   }
 }
 
-function runLocalFactCheck(draft: WriterDraft): FactCheckResult {
+function runLocalFactCheck(
+  draft: WriterDraft,
+  research: ExtendedResearchBrief
+): FactCheckResult {
   const violations: string[] = []
   const warnings: string[] = []
+  const sourcePatterns = buildSourceReferencePatterns(research.sources)
 
   const text = `${draft.headline}\n${draft.subheadline}\n${draft.lede}\n${draft.body}`
   const bannedMatches = findBannedPhrases(text)
@@ -1515,26 +2095,26 @@ function runLocalFactCheck(draft: WriterDraft): FactCheckResult {
   }
 
   const numericSentencePattern = /[^.\n]*\b\d[\d,.-]*\b[^.\n]*/g
-  const missingNumericCitations: string[] = []
+  const missingNumericAttributions: string[] = []
 
   for (const match of text.matchAll(numericSentencePattern)) {
     const sentence = match[0]
     const startIndex = match.index ?? 0
 
-    if (/\[[^\]]+\]/.test(sentence)) {
+    if (hasNamedSourceAttribution(sentence, sourcePatterns)) {
       continue
     }
 
     const trailingWindow = text.slice(startIndex, Math.min(text.length, startIndex + sentence.length + 160))
-    if (/\[[^\]]+\]/.test(trailingWindow)) {
+    if (hasNamedSourceAttribution(trailingWindow, sourcePatterns)) {
       continue
     }
 
-    missingNumericCitations.push(sentence.trim())
+    missingNumericAttributions.push(sentence.trim())
   }
 
-  if (missingNumericCitations.length > 0) {
-    warnings.push('Numeric claim found without inline citation')
+  if (missingNumericAttributions.length > 0) {
+    warnings.push('Numeric claim found without named source attribution')
   }
 
   if (usesBulletPoints(draft.body)) {
@@ -1545,9 +2125,17 @@ function runLocalFactCheck(draft: WriterDraft): FactCheckResult {
     violations.push(`Article below minimum length (${draft.wordCount}/${MIN_ARTICLE_WORDS} words)`)
   }
 
+  const attributedSentences = countAttributedSentences(draft.body, sourcePatterns)
+  const minimumAttributedSentences = Math.min(4, Math.max(MIN_KEY_FACTS, research.sources.length - 1))
+  if (attributedSentences < minimumAttributedSentences) {
+    violations.push(
+      `Insufficient named-source attribution in prose (${attributedSentences}/${minimumAttributedSentences} sentences)`
+    )
+  }
+
   if (/\b(health|medical|scientific|clinical|study|vaccine|disease|trial|research)\b/i.test(text)) {
-    if (!/\[[^\]]+\]/.test(text)) {
-      violations.push('Health or scientific claim without named inline source')
+    if (!hasNamedSourceAttribution(text, sourcePatterns)) {
+      violations.push('Health or scientific claim without named source attribution')
     }
   }
 
@@ -1577,14 +2165,19 @@ async function runFactCheck(
   })
 
   const modelResult = normalizeFactCheckResult(parseJsonObject<FactCheckResult>(modelOutput))
-  const localResult = runLocalFactCheck(draft)
+  const localResult = runLocalFactCheck(draft, research)
 
   if (!localResult.pass) {
     return localResult
   }
 
   if (!modelResult) {
-    return localResult
+    return {
+      pass: false,
+      warnings: localResult.warnings,
+      violations: ['Fact-check model output unavailable or invalid JSON'],
+      severity: 'critical',
+    }
   }
 
   if (!modelResult.pass) {
@@ -1601,6 +2194,68 @@ async function runFactCheck(
     violations: [],
     severity: modelResult.severity,
   }
+}
+
+async function runQualityGate(
+  draft: WriterDraft,
+  research: ExtendedResearchBrief,
+  topicScore: TopicScoreCard,
+  grade: Grade,
+  factCheck: FactCheckResult
+): Promise<QualityGateOutcome> {
+  const modelOutput = await callModel(QUALITY_GATE_PROMPT, {
+    article: draft,
+    research,
+    topicScore,
+    grade,
+    factCheck,
+  })
+
+  const modelScore = normalizeQualityScore(parseJsonObject<QualityScore>(modelOutput))
+  if (!modelScore) {
+    return {
+      qualityScore: null,
+      reason: 'Quality gate model output unavailable or invalid JSON',
+    }
+  }
+
+  const flaggedClaims = Array.from(
+    new Set([...(modelScore.flaggedClaims ?? []), ...(factCheck.violations ?? [])])
+  ).slice(0, 20)
+
+  const qualityScore: QualityScore = {
+    ...modelScore,
+    flaggedClaims,
+    publishRecommendation:
+      modelScore.publishRecommendation && modelScore.overallScore >= 7 && flaggedClaims.length === 0,
+  }
+
+  if (!qualityScore.publishRecommendation) {
+    return {
+      qualityScore,
+      reason: `Quality gate rejected article (overallScore=${qualityScore.overallScore})`,
+    }
+  }
+
+  return {
+    qualityScore,
+  }
+}
+
+function formatQualityGateFailure(outcome: QualityGateOutcome) {
+  if (outcome.reason) {
+    return outcome.reason
+  }
+
+  if (!outcome.qualityScore) {
+    return 'Quality gate unavailable'
+  }
+
+  const flaggedClaims = outcome.qualityScore.flaggedClaims.join('; ')
+  const claimsPart = flaggedClaims ? `flaggedClaims=${flaggedClaims}` : 'flaggedClaims=none'
+  const recommendationPart = `publishRecommendation=${outcome.qualityScore.publishRecommendation}`
+
+  return `Quality gate rejected article (overallScore=${outcome.qualityScore.overallScore}; ${recommendationPart}; ${claimsPart})`
 }
 
 function sanitizeSentence(value: string) {
@@ -1626,7 +2281,7 @@ function buildDeterministicWriterDraft(
     research.timeline.length > 0
       ? research.timeline
           .slice(0, 4)
-          .map((entry) => sanitizeSentence(`${entry.date}: ${entry.event} [${secondarySource}]`))
+          .map((entry) => sanitizeSentence(`${entry.date}: ${entry.event} (reported by ${secondarySource})`))
           .filter(Boolean)
           .join(' ')
       : `Reporting on ${research.topic} is still unfolding with additional updates expected.`
@@ -1646,21 +2301,21 @@ function buildDeterministicWriterDraft(
   paragraphs.push(
     `Coverage of ${research.topic} currently centers on verifiable developments documented by ${primarySource}. ${sanitizeSentence(
       keyFacts[0]?.fact ?? `${research.topic} is drawing sustained reporting attention.`
-    )} [${keyFacts[0]?.source ?? primarySource}]`
+    )} This detail is attributed to ${keyFacts[0]?.source ?? primarySource}.`
   )
 
   paragraphs.push(
-    `This story matters because the available record combines policy, market, and public-interest signals that can be checked in named reporting. The topic scored ${topicScore.totalScore}/100 on the editorial intake gate and moved forward for full verification work. [${primarySource}]`
+    `This story matters because the available record combines policy, market, and public-interest signals that can be checked in named reporting. The topic scored ${topicScore.totalScore}/100 on the editorial intake gate and moved forward for full verification work, based on reporting from ${primarySource}.`
   )
 
   for (const fact of keyFacts.slice(1, 6)) {
     paragraphs.push(
-      `${sanitizeSentence(fact.fact)} [${fact.source}] This detail is treated as ${fact.confidence} pending further corroboration in subsequent reporting passes. [${fact.source}]`
+      `${sanitizeSentence(fact.fact)} This detail is attributed to ${fact.source} and is treated as ${fact.confidence} pending further corroboration in subsequent reporting passes.`
     )
   }
 
   paragraphs.push(
-    `The reporting timeline currently reads as follows: ${timelineSummary} These entries help separate what happened first, what changed, and what still needs confirmation before stronger conclusions are justified. [${secondarySource}]`
+    `The reporting timeline currently reads as follows: ${timelineSummary} These entries help separate what happened first, what changed, and what still needs confirmation before stronger conclusions are justified, according to ${secondarySource}.`
   )
 
   if (research.conflictingClaims.length > 0) {
@@ -1668,23 +2323,23 @@ function buildDeterministicWriterDraft(
     paragraphs.push(
       `${sanitizeSentence(conflict.claim)} ${sanitizeSentence(
         `A competing framing says: ${conflict.counterclaim}`
-      )} Both interpretations are tracked until additional records resolve the gap. [${conflict.source}] [${conflict.counterSource}]`
+      )} Both interpretations are tracked until additional records resolve the gap, with competing attributions to ${conflict.source} and ${conflict.counterSource}.`
     )
   }
 
   paragraphs.push(
-    `${sanitizeSentence(research.backgroundContext)} This context clarifies the stakeholders, sequence, and practical stakes without relying on unsupported assumptions. [${supportingSource}]`
+    `${sanitizeSentence(research.backgroundContext)} This context clarifies the stakeholders, sequence, and practical stakes without relying on unsupported assumptions, and is grounded in reporting from ${supportingSource}.`
   )
 
   paragraphs.push(
-    `${whatWeDoNotKnow} This uncertainty section remains explicit so readers can separate confirmed facts from open questions. [${primarySource}]`
+    `${whatWeDoNotKnow} This uncertainty section remains explicit so readers can separate confirmed facts from open questions, based on the current record from ${primarySource}.`
   )
 
   paragraphs.push(
-    `${whatHappensNext} Future updates will be incorporated only when sourced evidence is published and attributable to named outlets. [${secondarySource}]`
+    `${whatHappensNext} Future updates will be incorporated only when sourced evidence is published and attributable to named outlets such as ${secondarySource}.`
   )
 
-  const expansionSentence = `Editors will continue comparing statements, timelines, and documented evidence across ${primarySource} and ${secondarySource} to preserve accuracy while new reporting arrives. [${primarySource}]`
+  const expansionSentence = `Editors will continue comparing statements, timelines, and documented evidence across ${primarySource} and ${secondarySource} to preserve accuracy while new reporting arrives.`
 
   while (countWords(paragraphs.join('\n\n')) < MIN_ARTICLE_WORDS) {
     paragraphs.push(expansionSentence)
@@ -1702,7 +2357,7 @@ function buildDeterministicWriterDraft(
     subheadline: `Current coverage from ${primarySource} and ${secondarySource} mapped against verifiable facts and open questions.`,
     lede: `${sanitizeSentence(
       keyFacts[0]?.fact ?? `${research.topic} remains under active reporting review.`
-    )} [${keyFacts[0]?.source ?? primarySource}]`,
+    )} According to ${keyFacts[0]?.source ?? primarySource}.`,
     body,
     category: research.category,
     tags: Array.from(new Set([research.category.toLowerCase(), ...topicTokens])).slice(0, 8),
@@ -1837,8 +2492,14 @@ async function writeArticleFromResearch(
     failedChecks.push(`Banned phrases detected: ${bannedPhraseMatches.join(', ')}`)
   }
 
-  if (!/\[[^\]]+\]/.test(parsed.body)) {
-    failedChecks.push('Inline source citations [Source Name] are required')
+  const sourcePatterns = buildSourceReferencePatterns(research.sources)
+  const attributedSentences = countAttributedSentences(parsed.body, sourcePatterns)
+  const minimumAttributedSentences = Math.min(4, Math.max(MIN_KEY_FACTS, research.sources.length - 1))
+
+  if (attributedSentences < minimumAttributedSentences) {
+    failedChecks.push(
+      `Add stronger named-source attribution in prose (${attributedSentences}/${minimumAttributedSentences} attributed sentences)`
+    )
   }
 
   if (failedChecks.length > 0) {
@@ -2044,12 +2705,19 @@ export async function generateArticleDraft(topic: string) {
     }
   }
 
-  const qualityScore = buildQualityScore(research, draft, topicScore, gradeDecision.grade, factCheck)
+  const qualityGate = await runQualityGate(draft, research, topicScore, gradeDecision.grade, factCheck)
+  if (!qualityGate.qualityScore || !qualityGate.qualityScore.publishRecommendation) {
+    return {
+      research: toPublicResearchBrief(research),
+      draft: null,
+      qualityScore: qualityGate.qualityScore,
+    }
+  }
 
   return {
     research: toPublicResearchBrief(research),
     draft,
-    qualityScore,
+    qualityScore: qualityGate.qualityScore,
   }
 }
 
@@ -2184,6 +2852,18 @@ export async function runPipeline(input: GenerateStoryInput) {
         continue
       }
 
+      if (draftResult.usedDeterministicFallback) {
+        summary.rejected += 1
+        logPipelineEvent(
+          'writing',
+          'failed',
+          score.topic,
+          `Rejected: ${score.topic} · Reason: deterministic fallback drafts are not publishable (${formatWriterFailure(draftResult.failure)})`,
+          68
+        )
+        continue
+      }
+
       selectedDraft = draft
       const writerProvider = draftResult.provider ?? 'unknown'
       logPipelineEvent(
@@ -2193,15 +2873,6 @@ export async function runPipeline(input: GenerateStoryInput) {
         `Writing article (${writerProvider}): ${draft.headline}...`,
         72
       )
-
-      if (draftResult.usedDeterministicFallback) {
-        logPipelineEvent(
-          'writing',
-          'completed',
-          draft.headline,
-          `Writer deterministic fallback used after model failures: ${formatWriterFailure(draftResult.failure)}`
-        )
-      }
 
       logPipelineEvent(
         'quality-gate',
@@ -2237,17 +2908,19 @@ export async function runPipeline(input: GenerateStoryInput) {
           continue
         }
 
+        if (rewriteResult.usedDeterministicFallback) {
+          summary.rejected += 1
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: deterministic fallback rewrite is not publishable (${formatWriterFailure(rewriteResult.failure)})`
+          )
+          continue
+        }
+
         finalDraft = rewrite
         selectedDraft = finalDraft
-
-        if (rewriteResult.usedDeterministicFallback) {
-          logPipelineEvent(
-            'writing',
-            'completed',
-            score.topic,
-            `Rewrite used deterministic writer fallback: ${formatWriterFailure(rewriteResult.failure)}`
-          )
-        }
 
         factCheck = await runFactCheck(finalDraft, research)
 
@@ -2264,13 +2937,101 @@ export async function runPipeline(input: GenerateStoryInput) {
         }
       }
 
-      const qualityScore = buildQualityScore(
-        research,
+      let qualityGate = await runQualityGate(
         finalDraft,
+        research,
         score,
         gradeDecision.grade,
         factCheck
       )
+
+      if (!qualityGate.qualityScore || !qualityGate.qualityScore.publishRecommendation) {
+        const qualityRewriteNotes = [
+          'Quality gate rejected this draft. Raise factual confidence, reduce sensational framing, and remove unsupported claims.',
+          ...(qualityGate.qualityScore?.flaggedClaims ?? []),
+        ]
+
+        const qualityRewriteResult = await writeArticleFromResearch(
+          research,
+          gradeDecision,
+          score,
+          0,
+          qualityRewriteNotes
+        )
+
+        const qualityRewriteDraft = qualityRewriteResult.draft
+        if (!qualityRewriteDraft) {
+          summary.rejected += 1
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: ${formatQualityGateFailure(qualityGate)} and rewrite failed (${formatWriterFailure(qualityRewriteResult.failure)})`
+          )
+          continue
+        }
+
+        if (qualityRewriteResult.usedDeterministicFallback) {
+          summary.rejected += 1
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: quality rewrite used deterministic fallback and is not publishable (${formatWriterFailure(qualityRewriteResult.failure)})`
+          )
+          continue
+        }
+
+        const qualityRewriteFactCheck = await runFactCheck(qualityRewriteDraft, research)
+        if (!qualityRewriteFactCheck.pass) {
+          summary.rejected += 1
+          const reason =
+            qualityRewriteFactCheck.violations.join('; ') ||
+            'Critical fact-check failure after quality rewrite'
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: ${reason}`
+          )
+          continue
+        }
+
+        qualityGate = await runQualityGate(
+          qualityRewriteDraft,
+          research,
+          score,
+          gradeDecision.grade,
+          qualityRewriteFactCheck
+        )
+
+        if (!qualityGate.qualityScore || !qualityGate.qualityScore.publishRecommendation) {
+          summary.rejected += 1
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: ${formatQualityGateFailure(qualityGate)}`
+          )
+          continue
+        }
+
+        finalDraft = qualityRewriteDraft
+        factCheck = qualityRewriteFactCheck
+        selectedDraft = finalDraft
+      }
+
+      const qualityScore = qualityGate.qualityScore
+      if (!qualityScore) {
+        summary.rejected += 1
+        logPipelineEvent(
+          'quality-gate',
+          'failed',
+          score.topic,
+          `Rejected: ${score.topic} · Reason: quality gate unavailable`
+        )
+        continue
+      }
 
       const article = await createArticleRecord(
         score.topic,

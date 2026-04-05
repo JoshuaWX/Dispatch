@@ -15,6 +15,7 @@ type ReaderArticle = {
   id: string
   title: string
   subtitle: string
+  lede: string
   author: string
   category: string
   publishedAt: string
@@ -91,11 +92,65 @@ type WeatherSnapshot = {
   city: string
 }
 
-function toParagraphs(text: string) {
-  return text
-    .split(/\n\n+/)
-    .map((paragraph) => paragraph.trim())
+type BodyBlock =
+  | {
+      type: 'heading'
+      level: 2 | 3 | 4
+      text: string
+    }
+  | {
+      type: 'blockquote'
+      text: string
+    }
+  | {
+      type: 'paragraph'
+      text: string
+    }
+
+function parseBodyBlocks(text: string): BodyBlock[] {
+  const normalized = text.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return []
+  }
+
+  const rawBlocks = normalized
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
     .filter(Boolean)
+
+  const blocks: BodyBlock[] = []
+
+  for (const rawBlock of rawBlocks) {
+    const headingMatch = rawBlock.match(/^(#{2,6})\s+(.+)$/)
+    if (headingMatch) {
+      const level = Math.min(4, Math.max(2, headingMatch[1].length)) as 2 | 3 | 4
+      const headingText = headingMatch[2].trim()
+      if (headingText) {
+        blocks.push({ type: 'heading', level, text: headingText })
+      }
+      continue
+    }
+
+    if (/^>\s*/.test(rawBlock)) {
+      const quoteText = rawBlock
+        .split('\n')
+        .map((line) => line.replace(/^>\s?/, '').trim())
+        .filter(Boolean)
+        .join(' ')
+
+      if (quoteText) {
+        blocks.push({ type: 'blockquote', text: quoteText })
+      }
+      continue
+    }
+
+    const paragraphText = rawBlock.replace(/\n+/g, ' ').trim()
+    if (paragraphText) {
+      blocks.push({ type: 'paragraph', text: paragraphText })
+    }
+  }
+
+  return blocks
 }
 
 function mapWeatherCode(code: number) {
@@ -241,16 +296,62 @@ function TagPills({ tags }: { tags: string[] }) {
 }
 
 function SectionedArticleBody({ lede, body }: { lede: string; body: string }) {
-  const paragraphs = toParagraphs(body)
+  const blocks = parseBodyBlocks(body)
 
   return (
     <div className="mx-auto max-w-170">
       <p className="text-lg sm:text-xl leading-[1.8] mb-6 text-foreground/85 font-medium">{lede}</p>
-      {paragraphs.map((paragraph, index) => (
-        <p key={`body-${index}`} className="text-base sm:text-[1.125rem] leading-[1.8] mb-6 text-foreground">
-          {paragraph}
-        </p>
-      ))}
+      {blocks.map((block, index) => {
+        if (block.type === 'heading') {
+          if (block.level === 2) {
+            return (
+              <h2
+                key={`body-${index}`}
+                className="text-xl sm:text-2xl font-serif font-bold text-foreground mt-10 mb-5"
+              >
+                {block.text}
+              </h2>
+            )
+          }
+
+          if (block.level === 3) {
+            return (
+              <h3
+                key={`body-${index}`}
+                className="text-lg sm:text-xl font-serif font-semibold text-foreground mt-8 mb-4"
+              >
+                {block.text}
+              </h3>
+            )
+          }
+
+          return (
+            <h4
+              key={`body-${index}`}
+              className="text-base sm:text-lg font-serif font-semibold text-foreground mt-7 mb-3"
+            >
+              {block.text}
+            </h4>
+          )
+        }
+
+        if (block.type === 'blockquote') {
+          return (
+            <blockquote
+              key={`body-${index}`}
+              className="my-7 border-l-2 border-primary/50 pl-4 italic text-foreground/85"
+            >
+              {block.text}
+            </blockquote>
+          )
+        }
+
+        return (
+          <p key={`body-${index}`} className="text-base sm:text-[1.125rem] leading-[1.8] mb-6 text-foreground">
+            {block.text}
+          </p>
+        )
+      })}
     </div>
   )
 }
@@ -519,6 +620,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
           id: json.id,
           title: json.headline,
           subtitle: json.subheadline || json.lede,
+          lede: json.lede || json.subheadline,
           author: 'Dispatch AI Desk',
           category: json.category,
           publishedAt: json.publishedAt,
@@ -692,7 +794,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
             <TagPills tags={article.tags} />
           </div>
 
-          <SectionedArticleBody lede={article.subtitle} body={article.content} />
+          <SectionedArticleBody lede={article.lede} body={article.content} />
 
           <ShareRow headline={article.title} pageUrl={pageUrl} />
 
