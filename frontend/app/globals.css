@@ -195,3 +195,27 @@
     @apply text-primary hover:text-primary/80 transition-colors no-underline hover:underline;
   }
 }
+
+@keyframes newsroom-ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.news-ticker-track {
+  animation: newsroom-ticker-scroll 42s linear infinite;
+}
+
+.news-ticker:hover .news-ticker-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .news-ticker-track {
+    animation: none;
+  }
+}

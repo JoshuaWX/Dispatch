@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { ArticleCard } from '@/components/article-card'
+import { NewsTicker } from '@/components/news-ticker'
 import { TrustStrip } from '@/components/trust-strip'
 
 type ApiArticle = {
@@ -100,6 +101,8 @@ export function HomePage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <NewsTicker />
+
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
         <div className="mb-12">
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-4">
