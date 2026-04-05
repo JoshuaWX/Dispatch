@@ -26,6 +26,14 @@ type ArticleRow = {
   published_at: string
   quality_score: PublishedArticle['qualityScore']
   verification_status: PublishedArticle['verificationStatus']
+  grade: PublishedArticle['grade'] | null
+  grade_badge: string | null
+  word_count: number | null
+  quality_score_value: number | null
+  what_we_do_not_know: string | null
+  what_happens_next: string | null
+  pipeline_run_id: string | null
+  fact_check_warnings: string[]
   created_at?: string
 }
 
@@ -64,6 +72,14 @@ function getSupabaseClient() {
   return globalForSupabase.__dispatchSupabaseClient
 }
 
+function isArticleGrade(value: unknown): value is NonNullable<PublishedArticle['grade']> {
+  return value === 'A' || value === 'B' || value === 'C'
+}
+
+function countWords(text: string) {
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
 function articleToRow(article: PublishedArticle): ArticleRow {
   return {
     id: article.id,
@@ -81,6 +97,22 @@ function articleToRow(article: PublishedArticle): ArticleRow {
     published_at: article.publishedAt,
     quality_score: article.qualityScore,
     verification_status: article.verificationStatus,
+    grade: article.grade ?? null,
+    grade_badge: article.gradeBadge ?? null,
+    word_count:
+      typeof article.wordCount === 'number' && Number.isFinite(article.wordCount)
+        ? Math.round(article.wordCount)
+        : countWords(article.body),
+    quality_score_value:
+      typeof article.qualityScoreValue === 'number' && Number.isFinite(article.qualityScoreValue)
+        ? article.qualityScoreValue
+        : article.qualityScore?.overallScore ?? null,
+    what_we_do_not_know: article.whatWeDoNotKnow ?? null,
+    what_happens_next: article.whatHappensNext ?? null,
+    pipeline_run_id: article.pipelineRunId ?? null,
+    fact_check_warnings: Array.isArray(article.factCheckWarnings)
+      ? article.factCheckWarnings.filter((warning): warning is string => typeof warning === 'string')
+      : [],
   }
 }
 
@@ -101,6 +133,24 @@ function rowToArticle(row: ArticleRow): PublishedArticle {
     publishedAt: row.published_at,
     qualityScore: row.quality_score,
     verificationStatus: row.verification_status,
+    grade: isArticleGrade(row.grade) ? row.grade : undefined,
+    gradeBadge: typeof row.grade_badge === 'string' ? row.grade_badge : undefined,
+    wordCount:
+      typeof row.word_count === 'number' && Number.isFinite(row.word_count)
+        ? row.word_count
+        : undefined,
+    qualityScoreValue:
+      typeof row.quality_score_value === 'number' && Number.isFinite(row.quality_score_value)
+        ? row.quality_score_value
+        : undefined,
+    whatWeDoNotKnow:
+      typeof row.what_we_do_not_know === 'string' ? row.what_we_do_not_know : undefined,
+    whatHappensNext:
+      typeof row.what_happens_next === 'string' ? row.what_happens_next : undefined,
+    pipelineRunId: typeof row.pipeline_run_id === 'string' ? row.pipeline_run_id : undefined,
+    factCheckWarnings: Array.isArray(row.fact_check_warnings)
+      ? row.fact_check_warnings.filter((warning): warning is string => typeof warning === 'string')
+      : [],
   }
 }
 

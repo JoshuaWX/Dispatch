@@ -15,7 +15,6 @@ import {
   getPipelineSnapshot,
   listArticlesPersistent,
   markPipelineDegraded,
-  markPipelineIdle,
   markPipelineRunning,
   markPipelineSuccess,
   recordPipelineEvent,
@@ -24,16 +23,187 @@ import {
 } from '@/lib/store'
 import {
   ARTICLE_WRITER_PROMPT,
-  QUALITY_GATE_PROMPT,
+  FACT_CHECK_PROMPT,
   QA_PROMPT,
   RESEARCH_BRIEF_PROMPT,
+  TOPIC_SCORING_PROMPT,
 } from '@/lib/prompts'
-import { getTopicImageHint, getTopics, searchNewsData } from '@/lib/newsdata'
+import { getTopicImageHint, getTopics, searchNewsData, type NewsSearchHit } from '@/lib/newsdata'
+import { getDailyVirloSnapshot } from '@/lib/virlo'
 import { resolveStoryImage } from '@/lib/story-image'
 
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514'
 const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
+
+const RAW_TOPIC_LIMIT = 15
+const MIN_TOPIC_SCORE = 60
+const MAX_RESEARCH_TOPICS = 5
+const MIN_KEY_FACTS = 3
+const MIN_ARTICLE_WORDS = 650
+const STRICT_DEDUPE_SIMILARITY = 0.86
+const SUBSTRING_DEDUPE_SIMILARITY = 0.92
+const MIN_TOKEN_OVERLAP_COUNT = 3
+const FACT_CORROBORATION_OVERLAP = 0.6
+const MATERIAL_CONFLICT_OVERLAP = 0.55
+
+const SEED_TOPICS = [
+  'AI regulation',
+  'climate summit',
+  'global markets',
+  'tech layoffs',
+  'space exploration',
+  'cybersecurity breach',
+  'election updates',
+  'energy transition',
+  'healthcare innovation',
+  'geopolitical tensions',
+]
+
+const BANNED_PHRASES = [
+  'the latest signals suggest',
+  'experts and observers',
+  'the responsible reading',
+  'still depends on evidence',
+  'under active debate',
+  'preliminary development',
+  'durable outcome',
+  'momentum is building',
+  'multiple sources point to',
+  'the situation is evolving',
+  'remains to be seen',
+  'sources indicate',
+  'analysts say',
+  'observers note',
+]
+
+const OVERSTATEMENT_TERMS = ['proven', 'cure', 'definitely', 'always', 'never', 'guaranteed']
+const TOKEN_STOPWORDS = new Set([
+  'about',
+  'after',
+  'against',
+  'before',
+  'between',
+  'during',
+  'from',
+  'into',
+  'over',
+  'under',
+  'with',
+  'without',
+  'this',
+  'that',
+  'these',
+  'those',
+  'their',
+  'there',
+  'where',
+  'which',
+  'when',
+  'while',
+  'today',
+  'latest',
+  'breaking',
+  'report',
+  'reported',
+  'reporting',
+  'news',
+  'story',
+  'stories',
+  'says',
+  'said',
+  'saying',
+  'update',
+  'updates',
+  'global',
+])
+
+const RESOLUTION_HINTS = [
+  'resolved',
+  'clarified',
+  'settled',
+  'confirmed by both',
+  'joint statement',
+  'agreement reached',
+  'aligned on',
+]
+
+const CONFLICT_TERM_PAIRS: Array<[string, string]> = [
+  ['increase', 'decrease'],
+  ['up', 'down'],
+  ['approved', 'rejected'],
+  ['confirmed', 'denied'],
+  ['expanding', 'shrinking'],
+  ['gain', 'loss'],
+  ['surplus', 'deficit'],
+]
+
+type SourceTier = 1 | 2 | 3
+type Grade = 'A' | 'B' | 'C' | 'D' | 'HOLD'
+
+type ResearchFailure = {
+  error: 'insufficient_data'
+  reason?: string
+}
+
+type TopicScoreCard = {
+  topic: string
+  freshness: number
+  sourceAvailability: number
+  publicInterest: number
+  verifiability: number
+  totalScore: number
+  skipReason: string | null
+}
+
+type ExtendedResearchSource = {
+  name: string
+  url: string
+  tier: SourceTier
+  credibilityNotes: string
+}
+
+type ExtendedResearchBrief = Omit<ResearchBrief, 'sources'> & {
+  sources: ExtendedResearchSource[]
+  whatWeDoNotKnow: string[]
+}
+
+type WriterDraft = ArticleDraft & {
+  wordCount: number
+  whatWeDoNotKnow: string
+  whatHappensNext: string
+  grade: string
+}
+
+type FactCheckResult = {
+  pass: boolean
+  warnings: string[]
+  violations: string[]
+  severity?: string
+}
+
+type IngestResult = {
+  rawTopics: string[]
+  source: 'manual' | 'newsdata' | 'virlo' | 'seed'
+}
+
+type GradeDecision = {
+  grade: Grade
+  note?: string
+  reason?: string
+  tierOneCount: number
+  hasCorroboration: boolean
+  unresolvedConflicts: boolean
+}
+
+type PipelineSummary = {
+  topicsIngested: number
+  scoredAbove60: number
+  researched: number
+  gradedABC: number
+  published: number
+  rejected: number
+}
 
 const globalForPipeline = globalThis as typeof globalThis & {
   __dispatchAutoRunPromise?: Promise<void>
@@ -69,8 +239,155 @@ function parseJsonObject<T>(raw: string | null): T | null {
   }
 }
 
+function normalizeTopic(value: string) {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function normalizeForCompare(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function tokenizeForSimilarity(value: string, minLength = 3) {
+  return new Set(
+    normalizeForCompare(value)
+      .split(' ')
+      .filter((token) => token.length >= minLength && !TOKEN_STOPWORDS.has(token))
+  )
+}
+
+function tokenizeTopic(value: string) {
+  return tokenizeForSimilarity(value, 4)
+}
+
+function setIntersectionCount(left: Set<string>, right: Set<string>) {
+  let count = 0
+  for (const token of left) {
+    if (right.has(token)) {
+      count += 1
+    }
+  }
+
+  return count
+}
+
+function overlapCoefficient(left: Set<string>, right: Set<string>) {
+  if (left.size === 0 || right.size === 0) {
+    return 0
+  }
+
+  return setIntersectionCount(left, right) / Math.max(1, Math.min(left.size, right.size))
+}
+
+function topicSimilarity(left: string, right: string) {
+  const leftTokens = tokenizeTopic(left)
+  const rightTokens = tokenizeTopic(right)
+  return overlapCoefficient(leftTokens, rightTokens)
+}
+
+function isSameStory(left: string, right: string) {
+  const normalizedLeft = normalizeForCompare(left)
+  const normalizedRight = normalizeForCompare(right)
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false
+  }
+
+  if (normalizedLeft === normalizedRight) {
+    return true
+  }
+
+  const leftTokens = tokenizeTopic(left)
+  const rightTokens = tokenizeTopic(right)
+  const overlap = overlapCoefficient(leftTokens, rightTokens)
+  const overlapCount = setIntersectionCount(leftTokens, rightTokens)
+
+  if (overlapCount < MIN_TOKEN_OVERLAP_COUNT) {
+    return false
+  }
+
+  if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) {
+    return overlap >= SUBSTRING_DEDUPE_SIMILARITY
+  }
+
+  return overlap >= STRICT_DEDUPE_SIMILARITY
+}
+
+function dedupeSimilarTopics(topics: string[]) {
+  const deduped: string[] = []
+
+  for (const topic of topics) {
+    const normalized = normalizeTopic(topic)
+    if (!normalized) {
+      continue
+    }
+
+    const duplicate = deduped.some((existing) => isSameStory(existing, normalized))
+    if (!duplicate) {
+      deduped.push(normalized)
+    }
+  }
+
+  return deduped
+}
+
 function isArticleCategory(value: unknown): value is ArticleCategory {
   return value === 'World' || value === 'Tech' || value === 'Business' || value === 'Science'
+}
+
+function pickCategory(topic: string): ArticleCategory {
+  const lower = topic.toLowerCase()
+
+  if (
+    lower.includes('tech') ||
+    lower.includes('ai') ||
+    lower.includes('model') ||
+    lower.includes('cyber')
+  ) {
+    return 'Tech'
+  }
+
+  if (
+    lower.includes('business') ||
+    lower.includes('market') ||
+    lower.includes('bank') ||
+    lower.includes('rate') ||
+    lower.includes('earnings')
+  ) {
+    return 'Business'
+  }
+
+  if (
+    lower.includes('science') ||
+    lower.includes('research') ||
+    lower.includes('quantum') ||
+    lower.includes('climate') ||
+    lower.includes('health')
+  ) {
+    return 'Science'
+  }
+
+  return 'World'
+}
+
+function countWords(text: string) {
+  return text.trim().split(/\s+/).filter(Boolean).length
+}
+
+function estimateReadingTime(text: string) {
+  return Math.max(4, Math.round(countWords(text) / 180))
+}
+
+function clampScore(value: unknown, min: number, max: number, fallback = min) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return fallback
+  }
+
+  return Math.max(min, Math.min(max, Number(value)))
 }
 
 function isSpecificSourceUrl(value: string) {
@@ -81,11 +398,11 @@ function isSpecificSourceUrl(value: string) {
     }
 
     const pathname = parsed.pathname.replace(/\/+$/g, '')
-    if (!pathname || pathname === '') {
+    if (!pathname || pathname === '/') {
       return false
     }
 
-    if (pathname === '/' || pathname === '/news' || pathname === '/news/' || pathname === '/blog' || pathname === '/blog/') {
+    if (pathname === '/news' || pathname === '/blog') {
       return false
     }
 
@@ -95,51 +412,164 @@ function isSpecificSourceUrl(value: string) {
   }
 }
 
-const BOILERPLATE_PHRASES = [
-  'the latest signals',
-  'experts and observers',
-  'the responsible reading',
-  'still depends on evidence',
-  'under active debate',
-  'preliminary development',
-  'durable outcome',
-  'coverage from',
-  'the immediate reporting value here is not dramatic language',
-  'taken together, the available reporting suggests',
-]
+function normalizeSourceTier(value: unknown): SourceTier | null {
+  if (value === 1 || value === 2 || value === 3) {
+    return value
+  }
 
-function containsBoilerplate(value: string) {
-  const lower = value.toLowerCase()
-  return BOILERPLATE_PHRASES.some((phrase) => lower.includes(phrase))
+  if (value === '1' || value === '2' || value === '3') {
+    return Number(value) as SourceTier
+  }
+
+  return null
 }
 
-function isResearchBrief(value: ResearchBrief | { error: 'insufficient_data' }): value is ResearchBrief {
-  return !('error' in value)
+function inferSourceTier(name: string, url: string): SourceTier {
+  const lowerName = name.toLowerCase()
+  const lowerUrl = url.toLowerCase()
+
+  if (
+    lowerName.includes('reuters') ||
+    lowerName.includes('associated press') ||
+    lowerName.includes('ap ') ||
+    lowerName.includes('afp') ||
+    lowerName.includes('government') ||
+    lowerUrl.includes('.gov/') ||
+    lowerUrl.includes('who.int/')
+  ) {
+    return 1
+  }
+
+  if (
+    lowerName.includes('university') ||
+    lowerName.includes('hospital') ||
+    lowerName.includes('bbc') ||
+    lowerName.includes('financial times') ||
+    lowerName.includes('bloomberg') ||
+    lowerName.includes('wsj') ||
+    lowerName.includes('the verge')
+  ) {
+    return 2
+  }
+
+  return 3
 }
 
-function buildResearchBriefFromSearchHits(topic: string, searchHits: Awaited<ReturnType<typeof searchNewsData>>): ResearchBrief | null {
-  const sources = searchHits.slice(0, 6).map((hit) => ({
-    name: hit.source,
-    url: hit.url,
-    credibilityNotes: hit.excerpt || `${hit.source} article`,
-  }))
+function isResearchFailure(
+  value: ExtendedResearchBrief | ResearchFailure
+): value is ResearchFailure {
+  return 'error' in value
+}
 
-  const namedSources = Array.from(new Set(searchHits.map((hit) => hit.source).filter(Boolean))).slice(0, 12)
+function normalizeTopicScore(topic: string, value: unknown): TopicScoreCard | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const input = value as Partial<TopicScoreCard>
+
+  const freshness = clampScore(input.freshness, 0, 25, 10)
+  const sourceAvailability = clampScore(input.sourceAvailability, 0, 25, 10)
+  const publicInterest = clampScore(input.publicInterest, 0, 25, 10)
+  const verifiability = clampScore(input.verifiability, 0, 25, 10)
+  const totalFallback = freshness + sourceAvailability + publicInterest + verifiability
+  const totalScore = clampScore(input.totalScore, 0, 100, totalFallback)
+
+  return {
+    topic: typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : topic,
+    freshness,
+    sourceAvailability,
+    publicInterest,
+    verifiability,
+    totalScore,
+    skipReason:
+      typeof input.skipReason === 'string' && input.skipReason.trim()
+        ? input.skipReason.trim()
+        : totalScore < MIN_TOPIC_SCORE
+          ? 'Scored below publication threshold'
+          : null,
+  }
+}
+
+function fallbackTopicScore(topic: string): TopicScoreCard {
+  const lower = topic.toLowerCase()
+
+  const freshness =
+    /(breaking|today|just in|live|update|urgent)/.test(lower)
+      ? 22
+      : /(this week|latest|new)/.test(lower)
+        ? 17
+        : 12
+
+  const sourceAvailability =
+    /(market|election|policy|regulation|ceasefire|security|health|company|government)/.test(lower)
+      ? 20
+      : 14
+
+  const publicInterest =
+    /(global|world|market|ai|health|election|climate|security|energy)/.test(lower)
+      ? 21
+      : 14
+
+  const verifiability =
+    /(report|study|data|official|announced|court|ministry|agency|percent|\d)/.test(lower)
+      ? 19
+      : 13
+
+  const totalScore = freshness + sourceAvailability + publicInterest + verifiability
+
+  return {
+    topic,
+    freshness,
+    sourceAvailability,
+    publicInterest,
+    verifiability,
+    totalScore,
+    skipReason: totalScore < MIN_TOPIC_SCORE ? 'Scored below publication threshold' : null,
+  }
+}
+
+function buildFallbackResearchBrief(
+  topic: string,
+  searchHits: NewsSearchHit[]
+): ExtendedResearchBrief | null {
+  const sourceMap = new Map<string, ExtendedResearchSource>()
+
+  for (const hit of searchHits) {
+    if (!hit.url || !isSpecificSourceUrl(hit.url)) {
+      continue
+    }
+
+    const key = `${normalizeForCompare(hit.source)}|${normalizeForCompare(hit.url)}`
+    if (sourceMap.has(key)) {
+      continue
+    }
+
+    sourceMap.set(key, {
+      name: hit.source,
+      url: hit.url,
+      tier: inferSourceTier(hit.source, hit.url),
+      credibilityNotes: hit.excerpt || `${hit.source} coverage related to ${topic}`,
+    })
+  }
+
+  const sources = Array.from(sourceMap.values()).slice(0, 5)
+  if (sources.length < MIN_KEY_FACTS) {
+    return null
+  }
+
   const seenFacts = new Set<string>()
   const keyFacts = searchHits
-    .filter((hit) => Boolean(hit.excerpt))
-    .map((hit) => ({
-      fact: hit.excerpt,
-      source: hit.source,
-      confidence: 'reported' as const,
-    }))
+    .map((hit) => {
+      const factCandidate = hit.excerpt?.trim() || `${hit.source} reported ${hit.title}.`
+      return {
+        fact: factCandidate,
+        source: hit.source,
+        confidence: 'reported' as const,
+      }
+    })
     .filter((fact) => {
-      const normalized = fact.fact
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-
+      const normalized = normalizeForCompare(fact.fact)
       if (!normalized || seenFacts.has(normalized)) {
         return false
       }
@@ -147,39 +577,26 @@ function buildResearchBriefFromSearchHits(topic: string, searchHits: Awaited<Ret
       seenFacts.add(normalized)
       return true
     })
-    .slice(0, 6)
+    .slice(0, 8)
 
-  if (sources.length < 3 || keyFacts.length < 3 || namedSources.length < 3) {
+  if (keyFacts.length < MIN_KEY_FACTS) {
     return null
   }
 
-  const timeline = searchHits.slice(0, 3).map((hit) => ({
+  const namedSources = Array.from(
+    new Set([...sources.map((source) => source.name), ...keyFacts.map((fact) => fact.source)])
+  ).slice(0, 12)
+
+  const timeline = searchHits.slice(0, 5).map((hit) => ({
     date: hit.publishedAt,
     event: `${hit.source} reported ${hit.title}`,
   }))
 
-  const conflictingClaims = searchHits.length >= 2
-    ? [
-        {
-          claim: `${searchHits[0].source} emphasizes the immediate development around ${topic}.`,
-          source: searchHits[0].source,
-          counterclaim: `${searchHits[1].source} frames the same topic with a different angle or emphasis.`,
-          counterSource: searchHits[1].source,
-        },
-      ]
-    : []
-
-  const backgroundContext = Array.from(new Set(
-    searchHits
-      .map((hit) => hit.excerpt)
-      .filter((excerpt): excerpt is string => Boolean(excerpt))
-  ))
+  const backgroundContext = Array.from(
+    new Set(searchHits.map((hit) => hit.excerpt).filter((excerpt): excerpt is string => Boolean(excerpt)))
+  )
     .slice(0, 3)
     .join(' ')
-
-  if (!backgroundContext) {
-    return null
-  }
 
   return {
     topic,
@@ -188,17 +605,25 @@ function buildResearchBriefFromSearchHits(topic: string, searchHits: Awaited<Ret
     keyFacts,
     namedSources,
     timeline,
-    conflictingClaims,
-    backgroundContext,
+    conflictingClaims: [],
+    backgroundContext: backgroundContext || `${topic} remains a developing story with active reporting.`,
+    whatWeDoNotKnow: [
+      'Officials have not released a complete timeline for all key decisions.',
+      'Additional independent corroboration may clarify disputed details in upcoming coverage.',
+    ],
   }
 }
 
-function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | null {
+function normalizeResearchBrief(
+  topic: string,
+  value: unknown,
+  searchHits: NewsSearchHit[]
+): ExtendedResearchBrief | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
-  const input = value as Partial<ResearchBrief>
+  const input = value as Partial<ExtendedResearchBrief>
   if (!Array.isArray(input.sources) || !Array.isArray(input.keyFacts)) {
     return null
   }
@@ -208,23 +633,33 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
   const sources = input.sources
     .filter((source) => source && typeof source === 'object')
     .map((source) => {
-      const typed = source as { name?: unknown; url?: unknown; credibilityNotes?: unknown }
+      const typed = source as {
+        name?: unknown
+        url?: unknown
+        tier?: unknown
+        credibilityNotes?: unknown
+      }
+
       const name = typeof typed.name === 'string' ? typed.name.trim() : ''
       const url = typeof typed.url === 'string' ? typed.url.trim() : ''
-      const credibilityNotes =
-        typeof typed.credibilityNotes === 'string' ? typed.credibilityNotes.trim() : ''
 
       if (!name || !url || !isSpecificSourceUrl(url)) {
         return null
       }
 
+      const tier = normalizeSourceTier(typed.tier) ?? inferSourceTier(name, url)
+
       return {
         name,
         url,
-        credibilityNotes,
+        tier,
+        credibilityNotes:
+          typeof typed.credibilityNotes === 'string' && typed.credibilityNotes.trim()
+            ? typed.credibilityNotes.trim()
+            : `${name} coverage related to ${topic}`,
       }
     })
-      .filter((source): source is ResearchBrief['sources'][number] => Boolean(source))
+    .filter((source): source is ExtendedResearchSource => Boolean(source))
     .slice(0, 6)
 
   const keyFacts = input.keyFacts
@@ -250,13 +685,53 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
         confidence,
       }
     })
-    .filter((fact): fact is ResearchBrief['keyFacts'][number] => Boolean(fact))
+    .filter((fact): fact is ExtendedResearchBrief['keyFacts'][number] => Boolean(fact))
     .slice(0, 16)
 
   const namedSources = Array.isArray(input.namedSources)
     ? input.namedSources
-        .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+        .filter((source): source is string => typeof source === 'string' && Boolean(source.trim()))
+        .map((source) => source.trim())
         .slice(0, 12)
+    : []
+
+  const timeline = Array.isArray(input.timeline)
+    ? input.timeline
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => {
+          const typed = entry as { date?: unknown; event?: unknown }
+          return {
+            date: typeof typed.date === 'string' ? typed.date : 'Unknown date',
+            event:
+              typeof typed.event === 'string' && typed.event.trim()
+                ? typed.event
+                : 'Timeline event unavailable.',
+          }
+        })
+        .slice(0, 10)
+    : []
+
+  const conflictingClaims = Array.isArray(input.conflictingClaims)
+    ? input.conflictingClaims
+        .filter((claim) => claim && typeof claim === 'object')
+        .map((claim) => {
+          const typed = claim as {
+            claim?: unknown
+            source?: unknown
+            counterclaim?: unknown
+            counterSource?: unknown
+          }
+
+          return {
+            claim: typeof typed.claim === 'string' ? typed.claim.trim() : '',
+            source: typeof typed.source === 'string' ? typed.source.trim() : '',
+            counterclaim: typeof typed.counterclaim === 'string' ? typed.counterclaim.trim() : '',
+            counterSource:
+              typeof typed.counterSource === 'string' ? typed.counterSource.trim() : '',
+          }
+        })
+        .filter((claim) => claim.claim && claim.counterclaim)
+        .slice(0, 10)
     : []
 
   const backgroundContext =
@@ -264,355 +739,326 @@ function normalizeResearchBrief(topic: string, value: unknown): ResearchBrief | 
       ? input.backgroundContext.trim()
       : ''
 
-  if (sources.length < 3 || keyFacts.length < 3 || namedSources.length < 3 || !backgroundContext) {
+  const whatWeDoNotKnow = Array.isArray(input.whatWeDoNotKnow)
+    ? input.whatWeDoNotKnow
+        .filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()))
+        .map((entry) => entry.trim())
+        .slice(0, 8)
+    : []
+
+  if (sources.length < MIN_KEY_FACTS || keyFacts.length < MIN_KEY_FACTS || !backgroundContext) {
     return null
   }
 
-  return {
+  const namedSourcesFallback = Array.from(new Set(sources.map((source) => source.name))).slice(0, 12)
+
+  const normalized: ExtendedResearchBrief = {
     topic: typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : topic,
     category,
     sources,
     keyFacts,
-    namedSources,
-    timeline: Array.isArray(input.timeline)
-      ? input.timeline
-          .filter((entry) => entry && typeof entry === 'object')
-          .map((entry) => {
-            const typed = entry as { date?: unknown; event?: unknown }
-            return {
-              date: typeof typed.date === 'string' ? typed.date : 'Unknown date',
-              event: typeof typed.event === 'string' ? typed.event : 'No event details available.',
-            }
-          })
-          .slice(0, 10)
-      : [],
-    conflictingClaims: Array.isArray(input.conflictingClaims)
-      ? input.conflictingClaims
-          .filter((claim) => claim && typeof claim === 'object')
-          .map((claim) => {
-            const typed = claim as {
-              claim?: unknown
-              source?: unknown
-              counterclaim?: unknown
-              counterSource?: unknown
-            }
-            return {
-              claim:
-                typeof typed.claim === 'string'
-                  ? typed.claim
-                  : `${topic} has competing interpretations.`,
-              source: typeof typed.source === 'string' ? typed.source : 'Unknown source',
-              counterclaim:
-                typeof typed.counterclaim === 'string'
-                  ? typed.counterclaim
-                  : 'Counter-position not specified.',
-              counterSource:
-                typeof typed.counterSource === 'string'
-                  ? typed.counterSource
-                  : 'Unknown source',
-            }
-          })
-          .slice(0, 10)
-      : [],
+    namedSources: namedSources.length > 0 ? namedSources : namedSourcesFallback,
+    timeline,
+    conflictingClaims,
     backgroundContext,
+    whatWeDoNotKnow,
+  }
+
+  if (normalized.namedSources.length < MIN_KEY_FACTS) {
+    const fallback = buildFallbackResearchBrief(topic, searchHits)
+    return fallback
+  }
+
+  if (normalized.whatWeDoNotKnow.length === 0) {
+    normalized.whatWeDoNotKnow = [
+      'Officials have not released full details on unresolved questions.',
+      'Further reporting is required to confirm all downstream implications.',
+    ]
+  }
+
+  return normalized
+}
+
+function toPublicResearchBrief(research: ExtendedResearchBrief): ResearchBrief {
+  return {
+    topic: research.topic,
+    category: research.category,
+    sources: research.sources.map((source) => ({
+      name: source.name,
+      url: source.url,
+      credibilityNotes: source.credibilityNotes,
+    })),
+    keyFacts: research.keyFacts,
+    namedSources: research.namedSources,
+    timeline: research.timeline,
+    conflictingClaims: research.conflictingClaims,
+    backgroundContext: research.backgroundContext,
   }
 }
 
-function normalizeDraft(value: unknown, research: ResearchBrief): ArticleDraft | null {
+function normalizeWriterDraft(
+  value: unknown,
+  research: ExtendedResearchBrief,
+  grade: Grade
+): WriterDraft | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
-  const input = value as Partial<ArticleDraft>
-  if (typeof input.body !== 'string' || typeof input.headline !== 'string' || typeof input.subheadline !== 'string') {
+  const input = value as Partial<WriterDraft>
+
+  if (
+    typeof input.headline !== 'string' ||
+    typeof input.subheadline !== 'string' ||
+    typeof input.body !== 'string'
+  ) {
+    return null
+  }
+
+  const body = input.body.trim()
+  if (!body) {
     return null
   }
 
   const category = isArticleCategory(input.category) ? input.category : research.category
+  const wordCount =
+    typeof input.wordCount === 'number' && Number.isFinite(input.wordCount)
+      ? Math.round(input.wordCount)
+      : countWords(body)
 
   return {
     headline: input.headline.trim(),
     subheadline: input.subheadline.trim(),
-    lede: typeof input.lede === 'string' && input.lede.trim() ? input.lede.trim() : '',
-    body: input.body.trim(),
+    lede:
+      typeof input.lede === 'string' && input.lede.trim()
+        ? input.lede.trim()
+        : body.split(/\n+/)[0]?.trim() || '',
+    body,
     category,
     tags: Array.isArray(input.tags)
       ? input.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 8)
       : [],
+    wordCount,
+    whatWeDoNotKnow:
+      typeof input.whatWeDoNotKnow === 'string' && input.whatWeDoNotKnow.trim()
+        ? input.whatWeDoNotKnow.trim()
+        : research.whatWeDoNotKnow.join(' '),
+    whatHappensNext:
+      typeof input.whatHappensNext === 'string' && input.whatHappensNext.trim()
+        ? input.whatHappensNext.trim()
+        : '',
+    grade:
+      typeof input.grade === 'string' && input.grade.trim() ? input.grade.trim() : grade,
   }
 }
 
-function normalizeQualityScore(value: unknown): QualityScore | null {
-  if (!value || typeof value !== 'object') {
-    return null
-  }
-
-  const input = value as Partial<QualityScore>
-  const metrics = [
-    input.sourceDiversity,
-    input.sensationalism,
-    input.factualConfidence,
-    input.ledeStrength,
-    input.overallScore,
-  ]
-
-  if (metrics.some((metric) => typeof metric !== 'number' || Number.isNaN(metric))) {
-    return null
-  }
-
-  return {
-    sourceDiversity: Math.min(10, Math.max(0, Number(input.sourceDiversity))),
-    sensationalism: Math.min(10, Math.max(0, Number(input.sensationalism))),
-    factualConfidence: Math.min(10, Math.max(0, Number(input.factualConfidence))),
-    ledeStrength: Math.min(10, Math.max(0, Number(input.ledeStrength))),
-    overallScore: Math.min(10, Math.max(0, Number(input.overallScore))),
-    flaggedClaims: Array.isArray(input.flaggedClaims)
-      ? input.flaggedClaims.filter((claim): claim is string => typeof claim === 'string').slice(0, 20)
-      : [],
-    publishRecommendation:
-      typeof input.publishRecommendation === 'boolean'
-        ? input.publishRecommendation
-        : Number(input.overallScore) >= 7,
-  }
+function findBannedPhrases(value: string) {
+  const lower = value.toLowerCase()
+  return BANNED_PHRASES.filter((phrase) => lower.includes(phrase))
 }
 
-const sourceSets: Record<ArticleCategory, ArticleSource[]> = {
-  World: [
-    {
-      id: 'world-1',
-      name: 'Associated Press',
-      url: 'https://apnews.com',
-      reliability: 'high',
-      excerpt:
-        'Independent reporting from multiple bureaus helps verify breaking diplomatic developments.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'world-2',
-      name: 'Reuters',
-      url: 'https://reuters.com',
-      reliability: 'high',
-      excerpt:
-        'Wire reporting emphasizes attribution, timeline, and confirmation of official statements.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'world-3',
-      name: 'BBC News',
-      url: 'https://bbc.com/news',
-      reliability: 'high',
-      excerpt: 'Context and background reporting from a broad international newsroom.',
-      publishedAt: 'Today',
-    },
-  ],
-  Tech: [
-    {
-      id: 'tech-1',
-      name: 'The Verge',
-      url: 'https://www.theverge.com',
-      reliability: 'high',
-      excerpt: 'Product and platform analysis for consumer-facing technology shifts.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'tech-2',
-      name: 'MIT Technology Review',
-      url: 'https://www.technologyreview.com',
-      reliability: 'high',
-      excerpt: 'Deep coverage of research and engineering milestones.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'tech-3',
-      name: 'Reuters',
-      url: 'https://reuters.com',
-      reliability: 'high',
-      excerpt: 'Business and policy implications of the technology story.',
-      publishedAt: 'Today',
-    },
-  ],
-  Business: [
-    {
-      id: 'business-1',
-      name: 'Reuters',
-      url: 'https://reuters.com',
-      reliability: 'high',
-      excerpt: 'Market-moving facts and policy context from a global wire service.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'business-2',
-      name: 'Bloomberg',
-      url: 'https://bloomberg.com',
-      reliability: 'high',
-      excerpt: 'Trading and macroeconomic interpretation from market reporters.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'business-3',
-      name: 'Financial Times',
-      url: 'https://ft.com',
-      reliability: 'high',
-      excerpt: 'Longer-form financial context and investor implications.',
-      publishedAt: 'Today',
-    },
-  ],
-  Science: [
-    {
-      id: 'science-1',
-      name: 'Nature',
-      url: 'https://nature.com',
-      reliability: 'high',
-      excerpt: 'Peer-reviewed context for claims about research and experimental results.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'science-2',
-      name: 'Science',
-      url: 'https://www.science.org',
-      reliability: 'high',
-      excerpt: 'Cross-checks technical significance and replication concerns.',
-      publishedAt: 'Today',
-    },
-    {
-      id: 'science-3',
-      name: 'MIT News',
-      url: 'https://news.mit.edu',
-      reliability: 'high',
-      excerpt: 'Institutional explanation of the underlying research progress.',
-      publishedAt: 'Today',
-    },
-  ],
+function usesBulletPoints(value: string) {
+  return /(^|\n)\s*[-*]\s+/.test(value)
 }
 
-function pickCategory(topic: string): ArticleCategory {
-  const lower = topic.toLowerCase()
-  if (
-    lower.includes('tech') ||
-    lower.includes('ai') ||
-    lower.includes('model') ||
-    lower.includes('cyber')
-  ) {
-    return 'Tech'
+function hasCorroboration(research: ExtendedResearchBrief) {
+  for (let i = 0; i < research.keyFacts.length; i += 1) {
+    const left = research.keyFacts[i]
+    const leftSource = normalizeForCompare(left.source)
+    const leftTokens = tokenizeForSimilarity(left.fact, 3)
+
+    if (leftTokens.size < MIN_TOKEN_OVERLAP_COUNT) {
+      continue
+    }
+
+    for (let j = i + 1; j < research.keyFacts.length; j += 1) {
+      const right = research.keyFacts[j]
+      const rightSource = normalizeForCompare(right.source)
+
+      if (!leftSource || !rightSource || leftSource === rightSource) {
+        continue
+      }
+
+      const rightTokens = tokenizeForSimilarity(right.fact, 3)
+      const overlap = overlapCoefficient(leftTokens, rightTokens)
+      const overlapCount = setIntersectionCount(leftTokens, rightTokens)
+
+      if (overlap >= FACT_CORROBORATION_OVERLAP && overlapCount >= MIN_TOKEN_OVERLAP_COUNT) {
+        return true
+      }
+    }
   }
-  if (
-    lower.includes('business') ||
-    lower.includes('market') ||
-    lower.includes('bank') ||
-    lower.includes('rate')
-  ) {
-    return 'Business'
-  }
-  if (
-    lower.includes('science') ||
-    lower.includes('research') ||
-    lower.includes('quantum') ||
-    lower.includes('climate')
-  ) {
-    return 'Science'
-  }
-  return 'World'
+
+  return false
 }
 
-function countWords(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean).length
+function extractNumericTokens(value: string) {
+  const matches = value.match(/\b\d[\d,.-]*\b/g) ?? []
+  return new Set(matches.map((token) => token.replace(/,/g, '')))
 }
 
-function estimateReadingTime(text: string) {
-  return Math.max(4, Math.round(countWords(text) / 180))
-}
+function hasDirectionalConflict(left: string, right: string) {
+  const lowerLeft = left.toLowerCase()
+  const lowerRight = right.toLowerCase()
 
-function buildResearchBrief(topic: string): ResearchBrief {
-  const category = pickCategory(topic)
-  const sources = sourceSets[category]
-
-  return {
-    topic,
-    category,
-    sources: sources.map(({ name, url, excerpt }) => ({
-      name,
-      url,
-      credibilityNotes: excerpt,
-    })),
-    keyFacts: sources.map((source, index) => ({
-      fact: `${topic} is drawing attention because ${category.toLowerCase()} analysts see a meaningful development on the horizon.`,
-      source: source.name,
-      confidence: index === 0 ? ('confirmed' as const) : ('reported' as const),
-    })),
-    namedSources: sources.map((source) => source.name),
-    timeline: [
-      { date: 'Today', event: `Signals around ${topic} intensified.` },
-      { date: 'Earlier this week', event: 'Observers started reassessing the timeline.' },
-      { date: 'Upcoming', event: 'Decision makers are expected to provide more detail.' },
-    ],
-    conflictingClaims: [
-      {
-        claim: `Supporters say ${topic} marks a genuine inflection point.`,
-        source: sources[0].name,
-        counterclaim: 'Skeptics argue the evidence is still preliminary.',
-        counterSource: sources[1]?.name ?? sources[0].name,
-      },
-    ],
-    backgroundContext:
-      `The broader context for ${topic} is a story about momentum, verification, and the gap between early signals and durable outcomes. Readers should understand both what is known and what remains uncertain.`,
-  }
-}
-
-function buildArticleDraft(research: ResearchBrief): ArticleDraft {
-  const leadSource = research.sources[0]
-  const secondarySource = research.sources[1]
-  const uniqueFacts = Array.from(
-    new Set(
-      research.keyFacts
-        .map((fact) => fact.fact?.trim())
-        .filter((fact): fact is string => Boolean(fact))
-    )
+  return CONFLICT_TERM_PAIRS.some(([a, b]) =>
+    (lowerLeft.includes(a) && lowerRight.includes(b)) ||
+    (lowerLeft.includes(b) && lowerRight.includes(a))
   )
-  const leadFact = uniqueFacts[0] ?? `${research.topic} is drawing sustained coverage from multiple outlets.`
-  const secondFact = uniqueFacts[1] ?? 'Reporting remains active as additional details are corroborated.'
-  const thirdFact = uniqueFacts[2] ?? ''
+}
 
-  const timelineSummary = research.timeline
-    .slice(0, 3)
-    .map((entry) => `${entry.date}: ${entry.event}`)
-    .join(' ')
+function hasNegationConflict(left: string, right: string) {
+  const negationPattern = /\b(no|not|never|denied?|reject(?:ed|s|ion)?|false)\b/i
+  const leftHasNegation = negationPattern.test(left)
+  const rightHasNegation = negationPattern.test(right)
 
-  const dispute = research.conflictingClaims[0]
-  const disputeParagraph = dispute
-    ? `${dispute.source} frames the development this way: ${dispute.claim} ${dispute.counterSource} presents a competing angle: ${dispute.counterclaim}`
-    : 'Across available reporting, the core facts are broadly aligned even where framing differs.'
+  if (leftHasNegation === rightHasNegation) {
+    return false
+  }
 
-  const bodyParagraphs = [
-    `${leadFact} ${leadSource ? `The most specific early details come from ${leadSource.name}, which anchors the initial timeline.` : ''}`.trim(),
-    `${secondFact} ${secondarySource ? `${secondarySource.name} adds corroborating detail that helps verify what is confirmed versus what is still developing.` : ''}`.trim(),
-    thirdFact ? `${thirdFact} This adds another verified layer that supports a fuller understanding of the event.` : '',
-    timelineSummary
-      ? `Timeline in current reporting: ${timelineSummary} Read together, these updates explain how the story developed and why it is receiving sustained attention now.`
-      : '',
-    disputeParagraph,
-    `${research.backgroundContext} The key editorial value is clarity: what has been verified, what remains disputed, and what readers should watch next as reporting continues.`,
-  ].filter(Boolean)
+  const overlap = overlapCoefficient(tokenizeForSimilarity(left, 3), tokenizeForSimilarity(right, 3))
+  return overlap >= MATERIAL_CONFLICT_OVERLAP
+}
+
+function isMaterialConflict(claim: string, counterclaim: string) {
+  const claimTokens = tokenizeForSimilarity(claim, 3)
+  const counterTokens = tokenizeForSimilarity(counterclaim, 3)
+  const overlap = overlapCoefficient(claimTokens, counterTokens)
+
+  if (overlap < MATERIAL_CONFLICT_OVERLAP) {
+    return false
+  }
+
+  const claimNumbers = extractNumericTokens(claim)
+  const counterNumbers = extractNumericTokens(counterclaim)
+  const sharedNumbers = setIntersectionCount(claimNumbers, counterNumbers)
+
+  if (claimNumbers.size > 0 && counterNumbers.size > 0 && sharedNumbers === 0) {
+    return true
+  }
+
+  if (hasDirectionalConflict(claim, counterclaim)) {
+    return true
+  }
+
+  return hasNegationConflict(claim, counterclaim)
+}
+
+function hasUnresolvedConflicts(research: ExtendedResearchBrief) {
+  return research.conflictingClaims.some((entry) => {
+    const claim = entry.claim?.trim()
+    const counterclaim = entry.counterclaim?.trim()
+
+    if (!claim || !counterclaim) {
+      return false
+    }
+
+    const combined = `${claim} ${counterclaim}`.toLowerCase()
+    const hasResolutionHint = RESOLUTION_HINTS.some((hint) => combined.includes(hint))
+    if (hasResolutionHint) {
+      return false
+    }
+
+    return isMaterialConflict(claim, counterclaim)
+  })
+}
+
+function assignResearchGrade(research: ExtendedResearchBrief): GradeDecision {
+  if (research.keyFacts.length < MIN_KEY_FACTS) {
+    return {
+      grade: 'D',
+      reason: 'No claims of substance (fewer than 3 key facts)',
+      tierOneCount: 0,
+      hasCorroboration: false,
+      unresolvedConflicts: false,
+    }
+  }
+
+  const tierOneCount = research.sources.filter((source) => source.tier === 1).length
+  const corroborated = hasCorroboration(research)
+  const unresolvedConflicts = hasUnresolvedConflicts(research)
+
+  if (unresolvedConflicts) {
+    return {
+      grade: 'HOLD',
+      reason: 'Conflicting claims remain unresolved',
+      tierOneCount,
+      hasCorroboration: corroborated,
+      unresolvedConflicts,
+    }
+  }
+
+  if (tierOneCount > 0 && corroborated) {
+    return {
+      grade: 'A',
+      tierOneCount,
+      hasCorroboration: true,
+      unresolvedConflicts,
+    }
+  }
+
+  if (tierOneCount > 0) {
+    return {
+      grade: 'B',
+      note: 'Based on single primary source',
+      tierOneCount,
+      hasCorroboration: false,
+      unresolvedConflicts,
+    }
+  }
 
   return {
-    headline: `What Current Reporting Shows About ${research.topic}`,
-    subheadline: `${leadSource?.name ?? 'Multiple sources'} and ${secondarySource?.name ?? 'additional reporting'} help establish what is verified, disputed, and still unfolding.`,
-    lede: `${research.topic} remains an active story with new reporting clarifying the timeline, the actors involved, and the immediate implications.`,
-    body: bodyParagraphs.join('\n\n'),
-    category: research.category,
-    tags: [research.category.toLowerCase(), ...research.topic.toLowerCase().split(/\s+/).slice(0, 3)],
+    grade: 'C',
+    note: 'DEVELOPING STORY',
+    tierOneCount,
+    hasCorroboration: false,
+    unresolvedConflicts,
   }
 }
 
-function scoreArticle(research: ResearchBrief, draft: ArticleDraft): QualityScore {
-  const sourceDiversity = Math.min(10, 6 + research.sources.length)
-  const sensationalism = 10
-  const factualConfidence = Math.min(
-    10,
-    7 + research.keyFacts.filter((fact) => fact.confidence === 'confirmed').length
-  )
-  const ledeStrength = Math.min(10, 8 + (draft.lede.length > 80 ? 1 : 0))
+function getGradeBadge(grade: Grade) {
+  if (grade === 'A') {
+    return 'Grade A · Verified & Corroborated'
+  }
+
+  if (grade === 'B') {
+    return 'Grade B · Primary Source'
+  }
+
+  return 'Grade C · Developing Story'
+}
+
+function buildSources(research: ExtendedResearchBrief): ArticleSource[] {
+  return research.sources.map((source) => {
+    const reliability = source.tier === 1 ? 'high' : source.tier === 2 ? 'medium' : 'low'
+    return {
+      id: randomUUID(),
+      name: source.name,
+      url: source.url,
+      reliability,
+      excerpt: source.credibilityNotes,
+      publishedAt: 'Today',
+    }
+  })
+}
+
+function buildQualityScore(
+  research: ExtendedResearchBrief,
+  draft: WriterDraft,
+  topicScore: TopicScoreCard,
+  grade: Grade,
+  factCheck: FactCheckResult
+): QualityScore {
+  const sourceDiversity = Number(Math.min(10, Math.max(4, research.sources.length * 1.8)).toFixed(1))
+  const sensationalism = factCheck.violations.length > 0 ? 4 : factCheck.warnings.length > 0 ? 8 : 9.5
+  const factualConfidence = grade === 'A' ? 9.5 : grade === 'B' ? 8.2 : 7.2
+  const ledeStrength = countWords(draft.lede) >= 18 ? 8.8 : 7.4
+  const topicalStrength = Number((topicScore.totalScore / 10).toFixed(1))
   const overallScore = Number(
-    ((sourceDiversity + sensationalism + factualConfidence + ledeStrength) / 4).toFixed(1)
+    (
+      (sourceDiversity + sensationalism + factualConfidence + ledeStrength + topicalStrength) /
+      5
+    ).toFixed(1)
   )
 
   return {
@@ -621,26 +1067,14 @@ function scoreArticle(research: ResearchBrief, draft: ArticleDraft): QualityScor
     factualConfidence,
     ledeStrength,
     overallScore,
-    flaggedClaims: overallScore < 7 ? ['Insufficient corroboration for publication.'] : [],
-    publishRecommendation: overallScore >= 7,
+    flaggedClaims: factCheck.violations.slice(0, 20),
+    publishRecommendation: factCheck.pass && overallScore >= 7,
   }
-}
-
-function buildSources(research: ResearchBrief): ArticleSource[] {
-  return research.sources.map((source, index) => ({
-    id: randomUUID(),
-    name: source.name,
-    url: source.url,
-    reliability: index === 0 ? 'high' : 'medium',
-    excerpt: source.credibilityNotes,
-    publishedAt: 'Today',
-  }))
 }
 
 async function callAnthropic(system: string, payload: object) {
   const apiKey = process.env.ANTHROPIC_API_KEY ?? ''
   if (!apiKey) {
-    console.log('[callAnthropic] No API key configured')
     return null
   }
 
@@ -654,7 +1088,7 @@ async function callAnthropic(system: string, payload: object) {
       },
       body: JSON.stringify({
         model: DEFAULT_ANTHROPIC_MODEL,
-        max_tokens: 1800,
+        max_tokens: 2600,
         system,
         messages: [
           {
@@ -666,7 +1100,7 @@ async function callAnthropic(system: string, payload: object) {
     })
 
     if (!response.ok) {
-      console.warn(`[callAnthropic] Failed with status ${response.status}, response:`, await response.text())
+      console.warn(`[callAnthropic] failed with status ${response.status}`)
       return null
     }
 
@@ -674,7 +1108,7 @@ async function callAnthropic(system: string, payload: object) {
     const text = json?.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
     return text || null
   } catch (error) {
-    console.error('[callAnthropic] Error:', error instanceof Error ? error.message : error)
+    console.error('[callAnthropic] error:', error instanceof Error ? error.message : error)
     return null
   }
 }
@@ -682,7 +1116,6 @@ async function callAnthropic(system: string, payload: object) {
 async function callGroq(system: string, payload: object) {
   const apiKey = process.env.GROQ_API_KEY ?? ''
   if (!apiKey) {
-    console.log('[callGroq] No API key configured')
     return null
   }
 
@@ -695,8 +1128,8 @@ async function callGroq(system: string, payload: object) {
       },
       body: JSON.stringify({
         model: DEFAULT_GROQ_MODEL,
-        temperature: 0.2,
-        max_tokens: 1800,
+        temperature: 0.15,
+        max_tokens: 2600,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: JSON.stringify(payload) },
@@ -705,7 +1138,7 @@ async function callGroq(system: string, payload: object) {
     })
 
     if (!response.ok) {
-      console.warn(`[callGroq] Failed with status ${response.status}, response:`, await response.text())
+      console.warn(`[callGroq] failed with status ${response.status}`)
       return null
     }
 
@@ -713,44 +1146,387 @@ async function callGroq(system: string, payload: object) {
     const text = json?.choices?.[0]?.message?.content
     return typeof text === 'string' && text.trim() ? text : null
   } catch (error) {
-    console.error('[callGroq] Error:', error instanceof Error ? error.message : error)
+    console.error('[callGroq] error:', error instanceof Error ? error.message : error)
     return null
   }
 }
 
 async function callModel(system: string, payload: object) {
   if (AI_PROVIDER === 'anthropic') {
-    console.log('[callModel] Using Anthropic')
     return callAnthropic(system, payload)
   }
 
   if (AI_PROVIDER === 'groq') {
-    console.log('[callModel] Using Groq')
     return callGroq(system, payload)
   }
 
-  // Auto mode: prefer Groq if available, then Anthropic.
-  console.log('[callModel] Auto mode: trying Groq first')
-  const groqResult = await callGroq(system, payload)
-  if (groqResult) {
-    console.log('[callModel] Groq succeeded')
-    return groqResult
+  return (await callGroq(system, payload)) ?? callAnthropic(system, payload)
+}
+
+function setProgress(
+  stage: PipelineEvent['stage'],
+  progress: number,
+  message: string,
+  activeTopic?: string | null
+) {
+  const snapshot = getPipelineSnapshot()
+  setPipelineState({
+    status: 'running',
+    stage,
+    progress,
+    message,
+    activeTopic: activeTopic ?? snapshot.activeTopic,
+  })
+}
+
+function logPipelineEvent(
+  stage: PipelineEvent['stage'],
+  status: PipelineEvent['status'],
+  articleTitle: string,
+  details: string,
+  progress?: number
+) {
+  recordPipelineEvent({
+    stage,
+    status,
+    articleTitle,
+    details,
+  })
+
+  if (typeof progress === 'number') {
+    setProgress(stage, progress, details, articleTitle)
   }
-  console.log('[callModel] Groq failed, trying Anthropic')
-  return callAnthropic(system, payload)
+}
+
+async function ingestTopics(topicOverride?: string): Promise<IngestResult> {
+  if (topicOverride?.trim()) {
+    return {
+      rawTopics: dedupeSimilarTopics([topicOverride.trim()]).slice(0, RAW_TOPIC_LIMIT),
+      source: 'manual',
+    }
+  }
+
+  const virloSnapshot = await getDailyVirloSnapshot()
+
+  if (virloSnapshot.calledApi) {
+    logPipelineEvent(
+      'trend-intake',
+      virloSnapshot.success ? 'completed' : 'failed',
+      'Trend intake',
+      virloSnapshot.success
+        ? 'Fetching daily trends from Virlo...'
+        : `Virlo daily fetch failed: ${virloSnapshot.error ?? 'unknown error'}`,
+      8
+    )
+  } else if (virloSnapshot.fromCache) {
+    logPipelineEvent(
+      'trend-intake',
+      'completed',
+      'Trend intake',
+      'Using cached Virlo daily snapshot...',
+      8
+    )
+  }
+
+  logPipelineEvent('trend-intake', 'processing', 'Trend intake', 'Fetching topics from NewsData...', 12)
+  const newsTopics = await getTopics()
+
+  let selected = newsTopics
+  let source: IngestResult['source'] = 'newsdata'
+
+  if (selected.length === 0 && virloSnapshot.topics.length > 0) {
+    selected = virloSnapshot.topics
+    source = 'virlo'
+  }
+
+  if (selected.length === 0) {
+    selected = SEED_TOPICS
+    source = 'seed'
+  }
+
+  const rawTopics = dedupeSimilarTopics(selected).slice(0, RAW_TOPIC_LIMIT)
+  return {
+    rawTopics,
+    source,
+  }
+}
+
+async function scoreTopic(topic: string): Promise<TopicScoreCard> {
+  const modelOutput = await callModel(TOPIC_SCORING_PROMPT, { topic })
+  const parsed = normalizeTopicScore(topic, parseJsonObject<TopicScoreCard>(modelOutput))
+  return parsed ?? fallbackTopicScore(topic)
+}
+
+async function scoreTopics(rawTopics: string[]) {
+  logPipelineEvent(
+    'trend-intake',
+    'processing',
+    'Topic scoring',
+    `Scoring ${rawTopics.length} topics...`,
+    20
+  )
+
+  const scores: TopicScoreCard[] = []
+
+  for (const topic of rawTopics) {
+    const score = await scoreTopic(topic)
+    scores.push(score)
+
+    const details =
+      score.totalScore >= MIN_TOPIC_SCORE
+        ? `Topic '${topic}' scored ${score.totalScore}/100 -> researching`
+        : `Topic '${topic}' scored ${score.totalScore}/100 -> skipped`
+
+    logPipelineEvent(
+      'trend-intake',
+      score.totalScore >= MIN_TOPIC_SCORE ? 'completed' : 'failed',
+      topic,
+      details
+    )
+    console.log(`Topic ${topic} scored ${score.totalScore}/100`)
+  }
+
+  return scores.sort((left, right) => right.totalScore - left.totalScore)
+}
+
+async function researchTopicInternal(
+  topic: string
+): Promise<ExtendedResearchBrief | ResearchFailure> {
+  const searchHits = await searchNewsData(topic)
+  if (searchHits.length < MIN_KEY_FACTS) {
+    return {
+      error: 'insufficient_data',
+      reason: 'NewsData returned fewer than 3 candidate sources',
+    }
+  }
+
+  const modelOutput = await callModel(RESEARCH_BRIEF_PROMPT, {
+    topic,
+    searchResults: searchHits,
+  })
+
+  const parsed = parseJsonObject<ExtendedResearchBrief | ResearchFailure>(modelOutput)
+  if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+    return {
+      error: 'insufficient_data',
+      reason: typeof parsed.reason === 'string' ? parsed.reason : 'Research model reported insufficient data',
+    }
+  }
+
+  const normalized = normalizeResearchBrief(topic, parsed, searchHits)
+  const research = normalized ?? buildFallbackResearchBrief(topic, searchHits)
+
+  if (!research || research.keyFacts.length < MIN_KEY_FACTS) {
+    return {
+      error: 'insufficient_data',
+      reason: 'Unable to produce 3 verifiable facts from NewsData results',
+    }
+  }
+
+  return research
+}
+
+function normalizeFactCheckResult(value: unknown): FactCheckResult | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const input = value as {
+    pass?: unknown
+    warnings?: unknown
+    violations?: unknown
+    severity?: unknown
+  }
+
+  if (typeof input.pass !== 'boolean') {
+    return null
+  }
+
+  const warnings = Array.isArray(input.warnings)
+    ? input.warnings.filter((warning): warning is string => typeof warning === 'string').slice(0, 20)
+    : []
+
+  const violations = Array.isArray(input.violations)
+    ? input.violations
+        .filter((violation): violation is string => typeof violation === 'string')
+        .slice(0, 20)
+    : []
+
+  return {
+    pass: input.pass,
+    warnings,
+    violations,
+    severity: typeof input.severity === 'string' ? input.severity : undefined,
+  }
+}
+
+function runLocalFactCheck(draft: WriterDraft): FactCheckResult {
+  const violations: string[] = []
+  const warnings: string[] = []
+
+  const text = `${draft.headline}\n${draft.subheadline}\n${draft.lede}\n${draft.body}`
+  const bannedMatches = findBannedPhrases(text)
+  if (bannedMatches.length > 0) {
+    violations.push(`Banned phrases present: ${bannedMatches.join(', ')}`)
+  }
+
+  const overstatementPattern = new RegExp(`\\b(${OVERSTATEMENT_TERMS.join('|')})\\b`, 'i')
+  if (overstatementPattern.test(text)) {
+    violations.push('Overstatement language detected')
+  }
+
+  const numericSentences = text.match(/[^.\n]*\b\d[\d,.-]*\b[^.\n]*/g) ?? []
+  const missingNumericCitations = numericSentences.filter(
+    (sentence) => !sentence.includes('[') || !sentence.includes(']')
+  )
+  if (missingNumericCitations.length > 0) {
+    violations.push('Numeric claim found without inline citation')
+  }
+
+  if (usesBulletPoints(draft.body)) {
+    warnings.push('Article body includes bullet formatting instead of full prose')
+  }
+
+  if (draft.wordCount < MIN_ARTICLE_WORDS) {
+    violations.push(`Article below minimum length (${draft.wordCount}/${MIN_ARTICLE_WORDS} words)`)
+  }
+
+  if (/\b(health|medical|scientific|clinical|study|vaccine|disease|trial|research)\b/i.test(text)) {
+    if (!/\[[^\]]+\]/.test(text)) {
+      violations.push('Health or scientific claim without named inline source')
+    }
+  }
+
+  if (violations.length > 0) {
+    return {
+      pass: false,
+      warnings,
+      violations,
+      severity: 'critical',
+    }
+  }
+
+  return {
+    pass: true,
+    warnings,
+    violations: [],
+  }
+}
+
+async function runFactCheck(
+  draft: WriterDraft,
+  research: ExtendedResearchBrief
+): Promise<FactCheckResult> {
+  const modelOutput = await callModel(FACT_CHECK_PROMPT, {
+    article: draft,
+    research,
+  })
+
+  const modelResult = normalizeFactCheckResult(parseJsonObject<FactCheckResult>(modelOutput))
+  const localResult = runLocalFactCheck(draft)
+
+  if (!localResult.pass) {
+    return localResult
+  }
+
+  if (!modelResult) {
+    return localResult
+  }
+
+  if (!modelResult.pass) {
+    return {
+      ...modelResult,
+      warnings: modelResult.warnings ?? [],
+      violations: modelResult.violations ?? [],
+    }
+  }
+
+  return {
+    pass: true,
+    warnings: Array.from(new Set([...(modelResult.warnings ?? []), ...localResult.warnings])),
+    violations: [],
+    severity: modelResult.severity,
+  }
+}
+
+async function writeArticleFromResearch(
+  research: ExtendedResearchBrief,
+  gradeDecision: GradeDecision,
+  topicScore: TopicScoreCard,
+  attempt = 0,
+  rewriteNotes: string[] = []
+): Promise<WriterDraft | null> {
+  const modelOutput = await callModel(ARTICLE_WRITER_PROMPT, {
+    topic: research.topic,
+    grade: gradeDecision.grade,
+    gradeNote: gradeDecision.note ?? null,
+    topicScore,
+    research,
+    rewriteNotes,
+  })
+
+  const parsed = normalizeWriterDraft(
+    parseJsonObject<WriterDraft>(modelOutput),
+    research,
+    gradeDecision.grade
+  )
+
+  if (!parsed) {
+    return null
+  }
+
+  const failedChecks: string[] = []
+
+  if (parsed.wordCount < MIN_ARTICLE_WORDS) {
+    failedChecks.push(`Minimum ${MIN_ARTICLE_WORDS} words required`)
+  }
+
+  if (usesBulletPoints(parsed.body)) {
+    failedChecks.push('Article must be prose only with no bullet points')
+  }
+
+  const bannedPhraseMatches = findBannedPhrases(
+    `${parsed.headline}\n${parsed.subheadline}\n${parsed.lede}\n${parsed.body}`
+  )
+  if (bannedPhraseMatches.length > 0) {
+    failedChecks.push(`Banned phrases detected: ${bannedPhraseMatches.join(', ')}`)
+  }
+
+  if (!/\[[^\]]+\]/.test(parsed.body)) {
+    failedChecks.push('Inline source citations [Source Name] are required')
+  }
+
+  if (failedChecks.length > 0) {
+    if (attempt >= 1) {
+      return null
+    }
+
+    return writeArticleFromResearch(
+      research,
+      gradeDecision,
+      topicScore,
+      attempt + 1,
+      [...rewriteNotes, ...failedChecks]
+    )
+  }
+
+  return parsed
 }
 
 async function createArticleRecord(
   topic: string,
-  research: ResearchBrief,
-  draft: ArticleDraft,
-  score: QualityScore
+  research: ExtendedResearchBrief,
+  draft: WriterDraft,
+  qualityScore: QualityScore,
+  grade: Grade,
+  pipelineRunId: string,
+  factCheckWarnings: string[]
 ): Promise<PublishedArticle> {
   const body = draft.body.trim()
   const hintedImageUrl = await getTopicImageHint(topic)
   const visual = await resolveStoryImage(topic, draft.category, hintedImageUrl)
 
-  return {
+  const article = {
     id: randomUUID(),
     topic,
     headline: draft.headline,
@@ -764,34 +1540,19 @@ async function createArticleRecord(
     sources: buildSources(research),
     readingTime: estimateReadingTime(body),
     publishedAt: new Date().toISOString(),
-    qualityScore: score,
-    verificationStatus: score.publishRecommendation ? 'verified' : 'pending',
-  }
-}
+    qualityScore,
+    verificationStatus: grade === 'A' ? 'verified' : 'pending',
+    grade,
+    gradeBadge: getGradeBadge(grade),
+    wordCount: draft.wordCount,
+    whatWeDoNotKnow: draft.whatWeDoNotKnow,
+    whatHappensNext: draft.whatHappensNext,
+    pipelineRunId,
+    factCheckWarnings,
+    qualityScoreValue: qualityScore.overallScore,
+  } as PublishedArticle
 
-function setProgress(stage: PipelineEvent['stage'], progress: number, message: string) {
-  const snapshot = getPipelineSnapshot()
-  setPipelineState({
-    status: 'running',
-    stage,
-    progress,
-    message,
-    activeTopic: snapshot.activeTopic,
-  })
-}
-
-export async function getTrendDigest() {
-  return getTopics()
-}
-
-export async function getPublishedArticles() {
-  const articles = await listArticlesPersistent()
-  maybeTriggerAutonomousRun(articles.length)
-  return articles
-}
-
-export async function getPublishedArticle(articleId: string) {
-  return getArticleByIdPersistent(articleId)
+  return article
 }
 
 function toPublishedPipelineEvents(articles: PublishedArticle[]): PipelineEvent[] {
@@ -803,6 +1564,30 @@ function toPublishedPipelineEvents(articles: PublishedArticle[]): PipelineEvent[
     articleTitle: article.headline,
     details: article.subheadline || article.lede.substring(0, 100),
   }))
+}
+
+export async function getTrendDigest() {
+  const virloSnapshot = await getDailyVirloSnapshot()
+  if (virloSnapshot.topics.length > 0) {
+    return virloSnapshot.topics
+  }
+
+  const newsTopics = await getTopics()
+  if (newsTopics.length > 0) {
+    return newsTopics
+  }
+
+  return [...SEED_TOPICS]
+}
+
+export async function getPublishedArticles() {
+  const articles = await listArticlesPersistent()
+  maybeTriggerAutonomousRun(articles.length)
+  return articles
+}
+
+export async function getPublishedArticle(articleId: string) {
+  return getArticleByIdPersistent(articleId)
 }
 
 export async function getPipelineStatus() {
@@ -818,15 +1603,6 @@ export async function getPipelineStatus() {
     ...snapshot,
     recentEvents: toPublishedPipelineEvents(articles),
   }
-}
-
-function chooseRandomTopic(topics: string[]) {
-  if (topics.length === 0) {
-    return null
-  }
-
-  const index = Math.floor(Math.random() * topics.length)
-  return topics[index] ?? null
 }
 
 function shouldAutonomousRun(articleCount: number) {
@@ -855,259 +1631,309 @@ function maybeTriggerAutonomousRun(articleCount: number, snapshot = getPipelineS
     })
 }
 
-export async function researchTopic(topic: string): Promise<ResearchBrief | { error: 'insufficient_data' }> {
-  const searchHits = await searchNewsData(topic)
-
-  console.info('[research] web search invoked via NewsData API', {
-    topic,
-    resultCount: searchHits.length,
-    urls: searchHits.slice(0, 5).map((item) => item.url),
-  })
-
-  if (searchHits.length < 3) {
-    return { error: 'insufficient_data' as const }
+export async function researchTopic(
+  topic: string
+): Promise<ResearchBrief | { error: 'insufficient_data'; reason?: string }> {
+  const research = await researchTopicInternal(topic)
+  if (isResearchFailure(research)) {
+    return research
   }
 
-  const research = buildResearchBriefFromSearchHits(topic, searchHits)
-  if (!research) {
-    return { error: 'insufficient_data' as const }
-  }
-
-  console.info('[research] final research JSON before writer', JSON.stringify(research, null, 2))
-
-  return research
-}
-
-async function generateDraftFromResearch(
-  research: ResearchBrief,
-  flaggedClaims: string[] = [],
-  rewriteReason?: 'boilerplate_detected' | 'quality_retry'
-) {
-  const modelOutput = await callModel(ARTICLE_WRITER_PROMPT, {
-    research,
-    flaggedClaimsToAvoid: flaggedClaims,
-    rewriteReason,
-  })
-
-  const parsedDraft = normalizeDraft(parseJsonObject<ArticleDraft>(modelOutput), research)
-  const draft = parsedDraft ?? buildArticleDraft(research)
-
-  const boilerplateDetected =
-    containsBoilerplate(draft.headline) ||
-    containsBoilerplate(draft.subheadline) ||
-    containsBoilerplate(draft.lede) ||
-    containsBoilerplate(draft.body)
-
-  if (boilerplateDetected) {
-    console.warn('Article rejected: boilerplate detected')
-    if (rewriteReason === 'boilerplate_detected') {
-      return null
-    }
-
-    return generateDraftFromResearch(research, flaggedClaims, 'boilerplate_detected')
-  }
-
-  return draft
-}
-
-async function evaluateQuality(research: ResearchBrief, draft: ArticleDraft): Promise<QualityScore> {
-  const fallbackScore = scoreArticle(research, draft)
-  const modelOutput = await callModel(QUALITY_GATE_PROMPT, {
-    research,
-    article: draft,
-  })
-
-  const parsedScore = normalizeQualityScore(parseJsonObject<QualityScore>(modelOutput))
-  return parsedScore ?? fallbackScore
+  return toPublicResearchBrief(research)
 }
 
 export async function generateArticleDraft(topic: string) {
-  const research = await researchTopic(topic)
-  if (!isResearchBrief(research)) {
+  const research = await researchTopicInternal(topic)
+  if (isResearchFailure(research)) {
     return { research, draft: null, qualityScore: null }
   }
 
-  const draft = await generateDraftFromResearch(research)
+  const gradeDecision = assignResearchGrade(research)
+  if (!['A', 'B', 'C'].includes(gradeDecision.grade)) {
+    return {
+      research: toPublicResearchBrief(research),
+      draft: null,
+      qualityScore: null,
+    }
+  }
+
+  const topicScore = await scoreTopic(topic)
+  const draft = await writeArticleFromResearch(research, gradeDecision, topicScore)
   if (!draft) {
-    return { research, draft: null, qualityScore: null }
+    return {
+      research: toPublicResearchBrief(research),
+      draft: null,
+      qualityScore: null,
+    }
   }
 
-  const qualityScore = await evaluateQuality(research, draft)
+  const factCheck = await runFactCheck(draft, research)
+  if (!factCheck.pass) {
+    return {
+      research: toPublicResearchBrief(research),
+      draft: null,
+      qualityScore: null,
+    }
+  }
 
-  return { research, draft, qualityScore }
+  const qualityScore = buildQualityScore(research, draft, topicScore, gradeDecision.grade, factCheck)
+
+  return {
+    research: toPublicResearchBrief(research),
+    draft,
+    qualityScore,
+  }
 }
 
 export async function runPipeline(input: GenerateStoryInput) {
-  const topics = await getTopics()
-  const selectedTopic = input.topic?.trim() || chooseRandomTopic(topics)
-
-  if (!selectedTopic) {
-    throw new Error('No topic available. Provide a topic or configure a trends source.')
+  const topicOverride = input.topic?.trim()
+  const summary: PipelineSummary = {
+    topicsIngested: 0,
+    scoredAbove60: 0,
+    researched: 0,
+    gradedABC: 0,
+    published: 0,
+    rejected: 0,
   }
 
-  return processTopic(selectedTopic, input, topics, new Set())
-}
+  const pipelineRunId = randomUUID()
+  const initialTopic = topicOverride || 'Daily trend intake'
+  markPipelineRunning(initialTopic)
 
-async function processTopic(
-  topic: string,
-  input: GenerateStoryInput,
-  allTopics: string[],
-  attemptedTopics: Set<string>,
-  retryCount = 0
-) {
-  if (retryCount > 2) {
-    markPipelineDegraded(`Unable to find publishable content after trying ${retryCount} topics`)
-    return {
-      published: false,
-      topic,
-      research: { error: 'insufficient_data' as const },
-      draft: null,
-      qualityScore: null,
-      article: null,
-    }
+  const ingested = await ingestTopics(topicOverride)
+  const rawTopics = dedupeSimilarTopics(ingested.rawTopics).slice(0, RAW_TOPIC_LIMIT)
+  summary.topicsIngested = rawTopics.length
+
+  if (rawTopics.length === 0) {
+    throw new Error('No topic available. Provide a topic or configure at least one source.')
   }
 
-  const currentTopic = topic || chooseRandomTopic(allTopics.filter((t) => !attemptedTopics.has(t)))
-  if (!currentTopic) {
-    throw new Error('No topics available for processing.')
+  let selectedTopic = rawTopics[0]
+  let selectedResearch: ResearchBrief | ResearchFailure = {
+    error: 'insufficient_data',
+    reason: 'No topic could be published',
   }
-
-  attemptedTopics.add(currentTopic)
-
-  markPipelineRunning(currentTopic)
-  recordPipelineEvent({
-    stage: 'trend-intake',
-    status: 'processing',
-    articleTitle: currentTopic,
-    details: 'Topic selected from NewsData topics feed and queued for research.',
-  })
+  let selectedDraft: ArticleDraft | null = null
+  let selectedQualityScore: QualityScore | null = null
+  let selectedArticle: PublishedArticle | null = null
 
   try {
-    setProgress('research', 25, `Researching ${currentTopic}`)
-    const research = await researchTopic(currentTopic)
-    if (!isResearchBrief(research)) {
+    const topicScores = await scoreTopics(rawTopics)
+    const shortlisted = topicScores
+      .filter((score) => score.totalScore >= MIN_TOPIC_SCORE)
+      .sort((left, right) => right.totalScore - left.totalScore)
+      .slice(0, MAX_RESEARCH_TOPICS)
+
+    summary.scoredAbove60 = topicScores.filter((score) => score.totalScore >= MIN_TOPIC_SCORE).length
+    summary.rejected += topicScores.filter((score) => score.totalScore < MIN_TOPIC_SCORE).length
+
+    if (shortlisted.length === 0) {
+      const message = 'No topics met the minimum scoring threshold of 60/100'
+      logPipelineEvent('quality-gate', 'failed', 'Topic scoring', message, 35)
+      markPipelineDegraded(message)
+
+      const summaryMessage = `Pipeline complete: ${summary.topicsIngested} topics ingested, ${summary.scoredAbove60} scored above 60, ${summary.researched} researched, ${summary.gradedABC} graded A/B/C, ${summary.published} published, ${summary.rejected} rejected`
+
       recordPipelineEvent({
-        stage: 'research',
+        stage: 'publish',
         status: 'failed',
-        articleTitle: currentTopic,
-        details: 'Insufficient real-world sources were found, trying a different topic.',
+        articleTitle: 'Pipeline summary',
+        details: summaryMessage,
       })
-      console.log(
-        `[runPipeline] Research failed for "${currentTopic}", retrying with different topic (attempt ${retryCount + 1}/3)`
-      )
 
-      // Pick a fresh topic and retry
-      const nextTopic = chooseRandomTopic(allTopics.filter((t) => !attemptedTopics.has(t)))
-      return processTopic(input.topic ? '' : nextTopic, input, allTopics, attemptedTopics, retryCount + 1)
-    }
-
-    recordPipelineEvent({
-      stage: 'research',
-      status: 'completed',
-      articleTitle: currentTopic,
-      details: `Collected ${research.sources.length} sources and key facts.`,
-    })
-
-    setProgress('writing', 55, 'Drafting reported article')
-    let draft = await generateDraftFromResearch(research)
-    if (!draft) {
-      recordPipelineEvent({
-        stage: 'writing',
-        status: 'failed',
-        articleTitle: currentTopic,
-        details: 'Draft generation returned no publishable article.',
-      })
-      markPipelineDegraded(`Draft generation failed for ${currentTopic}`)
       return {
         published: false,
-        topic: currentTopic,
-        research,
+        topic: selectedTopic,
+        research: selectedResearch,
         draft: null,
         qualityScore: null,
         article: null,
+        pipelineRunId,
+        summary,
       }
     }
 
-    recordPipelineEvent({
-      stage: 'writing',
-      status: 'completed',
-      articleTitle: currentTopic,
-      details: 'Generated newsroom-style lede, context, and body.',
-    })
+    for (const score of shortlisted) {
+      selectedTopic = score.topic
 
-    setProgress('quality-gate', 80, 'Scoring article for publication')
-    let qualityScore = await evaluateQuality(research, draft)
+      logPipelineEvent('research', 'processing', score.topic, `Researching: ${score.topic}...`, 45)
+      const research = await researchTopicInternal(score.topic)
+      if (isResearchFailure(research)) {
+        summary.rejected += 1
+        const reason = research.reason || 'insufficient_data'
+        logPipelineEvent(
+          'research',
+          'failed',
+          score.topic,
+          `Rejected: ${score.topic} · Reason: ${reason}`
+        )
+        continue
+      }
 
-    if (!qualityScore.publishRecommendation) {
-      draft = await generateDraftFromResearch(research, qualityScore.flaggedClaims)
+      summary.researched += 1
+      selectedResearch = toPublicResearchBrief(research)
+
+      const gradeDecision = assignResearchGrade(research)
+      console.log(`Article grade: ${gradeDecision.grade} for ${score.topic}`)
+
+      if (['A', 'B', 'C'].includes(gradeDecision.grade)) {
+        summary.gradedABC += 1
+      }
+
+      logPipelineEvent(
+        'quality-gate',
+        ['A', 'B', 'C'].includes(gradeDecision.grade) ? 'completed' : 'failed',
+        score.topic,
+        `Grade ${gradeDecision.grade} assigned to ${score.topic}`,
+        58
+      )
+
+      if (!['A', 'B', 'C'].includes(gradeDecision.grade)) {
+        summary.rejected += 1
+        const reason = gradeDecision.reason || `Grade ${gradeDecision.grade} is not publishable`
+        logPipelineEvent(
+          'quality-gate',
+          'failed',
+          score.topic,
+          `Rejected: ${score.topic} · Reason: ${reason}`
+        )
+        continue
+      }
+
+      const draft = await writeArticleFromResearch(research, gradeDecision, score)
       if (!draft) {
-        recordPipelineEvent({
-          stage: 'writing',
-          status: 'failed',
-          articleTitle: currentTopic,
-          details: 'Retry generation returned no publishable article.',
-        })
-        markPipelineDegraded(`Retry generation failed for ${currentTopic}`)
-        return {
-          published: false,
-          topic: currentTopic,
+        summary.rejected += 1
+        logPipelineEvent(
+          'writing',
+          'failed',
+          score.topic,
+          `Rejected: ${score.topic} · Reason: Writer failed hard constraints`,
+          68
+        )
+        continue
+      }
+
+      selectedDraft = draft
+      logPipelineEvent('writing', 'processing', draft.headline, `Writing article: ${draft.headline}...`, 72)
+
+      logPipelineEvent(
+        'quality-gate',
+        'processing',
+        draft.headline,
+        `Fact-checking: ${draft.headline}...`,
+        84
+      )
+
+      let factCheck = await runFactCheck(draft, research)
+      let finalDraft = draft
+
+      if (!factCheck.pass) {
+        const rewrite = await writeArticleFromResearch(
           research,
-          draft: null,
-          qualityScore: null,
-          article: null,
+          gradeDecision,
+          score,
+          0,
+          factCheck.violations
+        )
+
+        if (!rewrite) {
+          summary.rejected += 1
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: Fact-check failed and rewrite was invalid`
+          )
+          continue
+        }
+
+        finalDraft = rewrite
+        selectedDraft = finalDraft
+        factCheck = await runFactCheck(finalDraft, research)
+
+        if (!factCheck.pass) {
+          summary.rejected += 1
+          const reason = factCheck.violations.join('; ') || 'Critical fact-check failure'
+          logPipelineEvent(
+            'quality-gate',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: ${reason}`
+          )
+          continue
         }
       }
 
-      qualityScore = await evaluateQuality(research, draft)
-    }
-
-    if (!qualityScore.publishRecommendation) {
-      recordPipelineEvent({
-        stage: 'quality-gate',
-        status: 'failed',
-        articleTitle: currentTopic,
-        details: 'Article did not clear the quality threshold.',
-      })
-      markPipelineDegraded(`Quality gate rejected ${currentTopic}`)
-      return {
-        published: false,
-        topic: currentTopic,
+      const qualityScore = buildQualityScore(
         research,
-        draft,
+        finalDraft,
+        score,
+        gradeDecision.grade,
+        factCheck
+      )
+
+      const article = await createArticleRecord(
+        score.topic,
+        research,
+        finalDraft,
         qualityScore,
-        article: null,
-      }
+        gradeDecision.grade,
+        pipelineRunId,
+        factCheck.warnings
+      )
+
+      await upsertArticlePersistent(article)
+
+      selectedQualityScore = qualityScore
+      selectedArticle = article
+      selectedResearch = toPublicResearchBrief(research)
+      selectedTopic = score.topic
+      summary.published += 1
+
+      logPipelineEvent(
+        'publish',
+        'completed',
+        article.headline,
+        `Published: ${article.headline} · ${finalDraft.wordCount} words · Grade ${gradeDecision.grade}`,
+        100
+      )
+
+      break
     }
 
-    const article = await createArticleRecord(currentTopic, research, draft, qualityScore)
-    await upsertArticlePersistent(article)
+    const summaryMessage = `Pipeline complete: ${summary.topicsIngested} topics ingested, ${summary.scoredAbove60} scored above 60, ${summary.researched} researched, ${summary.gradedABC} graded A/B/C, ${summary.published} published, ${summary.rejected} rejected`
 
-    setProgress('publish', 100, 'Published to newsroom feed')
     recordPipelineEvent({
       stage: 'publish',
-      status: 'completed',
-      articleTitle: currentTopic,
-      details: 'Article published to the in-memory newsroom store.',
+      status: selectedArticle ? 'completed' : 'failed',
+      articleTitle: 'Pipeline summary',
+      details: summaryMessage,
     })
 
-    markPipelineSuccess(currentTopic)
+    if (selectedArticle) {
+      markPipelineSuccess(selectedTopic)
+    } else {
+      markPipelineDegraded(summaryMessage)
+    }
 
     return {
-      published: true,
-      topic: currentTopic,
-      research,
-      draft,
-      qualityScore,
-      article,
+      published: Boolean(selectedArticle),
+      topic: selectedTopic,
+      research: selectedResearch,
+      draft: selectedDraft,
+      qualityScore: selectedQualityScore,
+      article: selectedArticle,
+      pipelineRunId,
+      summary,
     }
   } catch (error) {
     recordPipelineEvent({
-      stage: 'research',
+      stage: 'publish',
       status: 'failed',
-      articleTitle: currentTopic,
+      articleTitle: selectedTopic,
       details: error instanceof Error ? error.message : 'Unexpected pipeline failure',
     })
-    markPipelineDegraded(`Pipeline failed while processing ${currentTopic}`)
+    markPipelineDegraded(`Pipeline failed while processing ${selectedTopic}`)
     throw error
   }
 }
@@ -1120,7 +1946,7 @@ export async function answerReporterQuestion(body: QaRequestBody) {
 
   const question = body.question.trim()
   const sourceNames = article.sources.map((source) => source.name).join(', ')
-  const answer = `Based on the article, the main answer is that ${article.topic.toLowerCase()} is still developing and the strongest evidence comes from ${sourceNames}. The report emphasizes the verified facts in the lede and body, while noting that any broader outcome remains contingent on future reporting. If you want, I can also break this down by sources, timeline, or implications.`
+  const answer = `Based on the published reporting, the strongest current answer is grounded in ${sourceNames}. The article focuses on attributed facts, flags what remains uncertain, and avoids claims that cannot be verified from named sources.`
 
   return {
     question,

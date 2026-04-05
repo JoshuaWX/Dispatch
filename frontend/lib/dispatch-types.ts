@@ -85,6 +85,8 @@ export interface ArticleSource {
   publishedAt: string
 }
 
+export type ArticleGrade = 'A' | 'B' | 'C'
+
 export interface PublishedArticle {
   id: string
   topic: string
@@ -101,6 +103,14 @@ export interface PublishedArticle {
   publishedAt: string
   qualityScore: QualityScore
   verificationStatus: 'verified' | 'pending' | 'unverified'
+  grade?: ArticleGrade
+  gradeBadge?: string
+  wordCount?: number
+  qualityScoreValue?: number
+  whatWeDoNotKnow?: string
+  whatHappensNext?: string
+  pipelineRunId?: string
+  factCheckWarnings?: string[]
 }
 
 export interface PipelineEvent {

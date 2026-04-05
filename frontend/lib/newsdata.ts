@@ -91,6 +91,7 @@ export async function getTopics(): Promise<string[]> {
     url.searchParams.set('apikey', apiKey)
     url.searchParams.set('language', 'en')
     url.searchParams.set('category', 'world,technology,business,science')
+    url.searchParams.set('size', '25')
 
     const response = await fetch(url.toString(), {
       next: { revalidate: 3600 },
