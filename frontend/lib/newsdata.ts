@@ -25,6 +25,54 @@ function normalizeTopic(value: string) {
   return value.trim().replace(/\s+/g, ' ')
 }
 
+function normalizeForCompare(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isLowQualityExcerpt(value: string) {
+  const normalized = normalizeForCompare(value)
+  if (!normalized) {
+    return true
+  }
+
+  const lowSignalPatterns = [
+    'get latest articles and stories',
+    'latestly',
+    'read more',
+    'click here',
+    'follow us on',
+  ]
+
+  return lowSignalPatterns.some((pattern) => normalized.includes(pattern))
+}
+
+function cleanExcerpt(value: string, fallbackTitle: string) {
+  const raw = value.trim()
+  if (!raw) {
+    return fallbackTitle.trim()
+  }
+
+  const stripped = raw
+    .replace(/^get latest articles and stories on [^.]+\.\s*/i, '')
+    .replace(/\[\.\.\.\].*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!stripped) {
+    return fallbackTitle.trim()
+  }
+
+  const firstSentenceMatch = stripped.match(/^(.+?[.!?])\s/)
+  const firstSentence = firstSentenceMatch?.[1] ?? stripped
+
+  return firstSentence.slice(0, 260).trim()
+}
+
 export async function getTopics(): Promise<string[]> {
   const now = Date.now()
   const cache = globalForNewsData.__dispatchNewsDataCache
@@ -154,7 +202,7 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
       }>
     }
 
-    const results = (payload.results ?? [])
+    const rawResults = (payload.results ?? [])
       .map((item) => {
         const url = item.link?.trim() || item.source_url?.trim() || ''
         if (!url) {
@@ -174,12 +222,33 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
           title: item.title?.trim() || topic,
           url,
           source,
-          excerpt: item.description?.trim() || '',
+          excerpt: cleanExcerpt(item.description?.trim() || '', item.title?.trim() || topic),
           publishedAt: item.pubDate?.trim() || 'Today',
           imageUrl: item.image_url?.trim() || undefined,
         }
       })
       .filter((item): item is NewsSearchHit => Boolean(item))
+
+    const seenTitles = new Set<string>()
+    const results = rawResults.filter((hit) => {
+      const normalizedTitle = normalizeForCompare(hit.title)
+      if (!normalizedTitle) {
+        return false
+      }
+
+      if (seenTitles.has(normalizedTitle)) {
+        return false
+      }
+
+      const hasGoodExcerpt = hit.excerpt.length >= 60 && !isLowQualityExcerpt(hit.excerpt)
+      const hasUsableTitle = hit.title.length >= 40
+      if (!hasGoodExcerpt && !hasUsableTitle) {
+        return false
+      }
+
+      seenTitles.add(normalizedTitle)
+      return true
+    })
 
     globalForNewsData.__dispatchNewsSearchCache = {
       ...(globalForNewsData.__dispatchNewsSearchCache ?? {}),

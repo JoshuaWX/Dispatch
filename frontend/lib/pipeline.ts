@@ -103,6 +103,9 @@ const BOILERPLATE_PHRASES = [
   'under active debate',
   'preliminary development',
   'durable outcome',
+  'coverage from',
+  'the immediate reporting value here is not dramatic language',
+  'taken together, the available reporting suggests',
 ]
 
 function containsBoilerplate(value: string) {
@@ -122,14 +125,29 @@ function buildResearchBriefFromSearchHits(topic: string, searchHits: Awaited<Ret
   }))
 
   const namedSources = Array.from(new Set(searchHits.map((hit) => hit.source).filter(Boolean))).slice(0, 12)
+  const seenFacts = new Set<string>()
   const keyFacts = searchHits
     .filter((hit) => Boolean(hit.excerpt))
-    .slice(0, 6)
     .map((hit) => ({
       fact: hit.excerpt,
       source: hit.source,
       confidence: 'reported' as const,
     }))
+    .filter((fact) => {
+      const normalized = fact.fact
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      if (!normalized || seenFacts.has(normalized)) {
+        return false
+      }
+
+      seenFacts.add(normalized)
+      return true
+    })
+    .slice(0, 6)
 
   if (sources.length < 3 || keyFacts.length < 3 || namedSources.length < 3) {
     return null
@@ -543,21 +561,43 @@ function buildResearchBrief(topic: string): ResearchBrief {
 function buildArticleDraft(research: ResearchBrief): ArticleDraft {
   const leadSource = research.sources[0]
   const secondarySource = research.sources[1]
-  const highlightFact = research.keyFacts[0]?.fact ?? `${research.topic} is drawing sustained coverage.`
-  const contextFact = research.keyFacts[1]?.fact ?? 'Multiple outlets are following the story as it develops.'
-  const backgroundFact = research.backgroundContext
+  const uniqueFacts = Array.from(
+    new Set(
+      research.keyFacts
+        .map((fact) => fact.fact?.trim())
+        .filter((fact): fact is string => Boolean(fact))
+    )
+  )
+  const leadFact = uniqueFacts[0] ?? `${research.topic} is drawing sustained coverage from multiple outlets.`
+  const secondFact = uniqueFacts[1] ?? 'Reporting remains active as additional details are corroborated.'
+  const thirdFact = uniqueFacts[2] ?? ''
+
+  const timelineSummary = research.timeline
+    .slice(0, 3)
+    .map((entry) => `${entry.date}: ${entry.event}`)
+    .join(' ')
+
+  const dispute = research.conflictingClaims[0]
+  const disputeParagraph = dispute
+    ? `${dispute.source} frames the development this way: ${dispute.claim} ${dispute.counterSource} presents a competing angle: ${dispute.counterclaim}`
+    : 'Across available reporting, the core facts are broadly aligned even where framing differs.'
+
+  const bodyParagraphs = [
+    `${leadFact} ${leadSource ? `The most specific early details come from ${leadSource.name}, which anchors the initial timeline.` : ''}`.trim(),
+    `${secondFact} ${secondarySource ? `${secondarySource.name} adds corroborating detail that helps verify what is confirmed versus what is still developing.` : ''}`.trim(),
+    thirdFact ? `${thirdFact} This adds another verified layer that supports a fuller understanding of the event.` : '',
+    timelineSummary
+      ? `Timeline in current reporting: ${timelineSummary} Read together, these updates explain how the story developed and why it is receiving sustained attention now.`
+      : '',
+    disputeParagraph,
+    `${research.backgroundContext} The key editorial value is clarity: what has been verified, what remains disputed, and what readers should watch next as reporting continues.`,
+  ].filter(Boolean)
 
   return {
-    headline: `${research.topic} draws broader attention as reporting adds new detail`,
-    subheadline: `Coverage from ${leadSource?.name ?? 'multiple outlets'} and other sources points to a story with clear near-term significance.`,
-    lede: `Reporting on ${research.topic} is converging around a small set of verified details: what happened, who is involved, and why the topic matters now.`,
-    body: [
-      `${highlightFact} ${leadSource ? `That detail appears in coverage from ${leadSource.name}, which points readers to the original reporting rather than a homepage or secondary roundup.` : ''}`,
-      `${contextFact} ${secondarySource ? `A second source, ${secondarySource.name}, adds another angle and helps show where the reporting overlaps.` : ''}`,
-      `The immediate reporting value here is not dramatic language. It is the convergence of sources, dates, and specific observations that let readers understand the event without losing the thread of the underlying facts.`,
-      `The background in the brief makes the broader frame clearer: ${backgroundFact}. That context is what turns a short news update into a usable reported story for readers who are encountering the topic for the first time.`,
-      `Taken together, the available reporting suggests a news event with enough substance to justify a full article. The piece should be read as a mapped account of what is known so far, not as a forecast or a vague summary of sentiment.`,
-    ].join('\n\n'),
+    headline: `What Current Reporting Shows About ${research.topic}`,
+    subheadline: `${leadSource?.name ?? 'Multiple sources'} and ${secondarySource?.name ?? 'additional reporting'} help establish what is verified, disputed, and still unfolding.`,
+    lede: `${research.topic} remains an active story with new reporting clarifying the timeline, the actors involved, and the immediate implications.`,
+    body: bodyParagraphs.join('\n\n'),
     category: research.category,
     tags: [research.category.toLowerCase(), ...research.topic.toLowerCase().split(/\s+/).slice(0, 3)],
   }
