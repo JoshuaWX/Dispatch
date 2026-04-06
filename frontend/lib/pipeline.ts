@@ -358,6 +358,7 @@ type ArticleRecordOptions = {
 
 const TESTING_UNVERIFIED_BADGE = '⚠ Unverified Draft'
 const LIMITED_SOURCES_BADGE = 'Grade C · Limited Sources'
+const LIMITED_SOURCES_AUTOPUBLISH_BADGE = '⚠ Limited Sources · Auto-Published'
 
 type PipelineSummary = {
   topicsIngested: number
@@ -1375,6 +1376,92 @@ function buildFallbackResearchBrief(
   }
 }
 
+function buildInsufficientDataEmergencyResearchBrief(
+  topic: string,
+  searchHits: NewsSearchHit[],
+  reason?: string
+): ExtendedResearchBrief | null {
+  const now = Date.now()
+
+  const sorted = [...searchHits]
+    .filter((hit) => Boolean(hit.url?.trim()))
+    .sort((left, right) => {
+      const leftPublishedAt = parseSearchHitPublishedAt(left.publishedAt, now) ?? 0
+      const rightPublishedAt = parseSearchHitPublishedAt(right.publishedAt, now) ?? 0
+      return rightPublishedAt - leftPublishedAt
+    })
+
+  const preferred = sorted.filter(
+    (hit) =>
+      Boolean(hit.url?.trim()) &&
+      isSpecificSourceUrl(hit.url) &&
+      !isLowCredibilitySource(hit.source, hit.url)
+  )
+
+  const candidates = (preferred.length > 0 ? preferred : sorted).slice(0, 4)
+  if (candidates.length === 0) {
+    return null
+  }
+
+  const sourceMap = new Map<string, ExtendedResearchSource>()
+  for (const hit of candidates) {
+    const url = hit.url?.trim() ?? ''
+    if (!url) {
+      continue
+    }
+
+    const key = `${normalizeForCompare(hit.source)}|${normalizeSourceUrl(url)}`
+    if (sourceMap.has(key)) {
+      continue
+    }
+
+    sourceMap.set(key, {
+      name: hit.source || 'Reported source',
+      url,
+      tier: inferSourceTier(hit.source || 'Reported source', url),
+      credibilityNotes: hit.excerpt?.trim() || `${hit.source} reported updates related to ${topic}`,
+    })
+  }
+
+  const sources = Array.from(sourceMap.values())
+  if (sources.length === 0) {
+    return null
+  }
+
+  const primaryHit = candidates[0]
+  const primarySource = sources[0].name
+  const primaryFact =
+    primaryHit.excerpt?.trim() || primaryHit.description?.trim() || `${primarySource} reported ${primaryHit.title}.`
+
+  const fallbackReason = reason?.trim()
+    ? sanitizeSentence(reason.trim())
+    : `Recent source coverage for ${topic} was limited at publish time.`
+
+  return {
+    topic,
+    category: pickCategory(topic),
+    sources,
+    keyFacts: [
+      {
+        fact: sanitizeSentence(primaryFact),
+        source: primarySource,
+        confidence: 'reported',
+      },
+    ],
+    namedSources: Array.from(new Set(sources.map((source) => source.name))).slice(0, 12),
+    timeline: candidates.slice(0, 3).map((hit) => ({
+      date: hit.publishedAt || 'Recent reporting window',
+      event: `${hit.source} reported ${hit.title}`,
+    })),
+    conflictingClaims: [],
+    backgroundContext: fallbackReason,
+    whatWeDoNotKnow: [
+      `Coverage density for ${topic} is still thin in the most recent window.`,
+      fallbackReason,
+    ],
+  }
+}
+
 function normalizeResearchBrief(
   topic: string,
   value: unknown,
@@ -2105,6 +2192,7 @@ function getGroqApiKeys() {
   const fallbackKeyTwo = (process.env.GROQ_API_KEY_FALLBACK_2 ?? '').trim()
   const fallbackKeyThree = (process.env.GROQ_API_KEY_FALLBACK_3 ?? '').trim()
   const fallbackKeyFour = (process.env.GROQ_API_KEY_FALLBACK_4 ?? '').trim()
+  const fallbackKeyFive = (process.env.GROQ_API_KEY_FALLBACK_5 ?? '').trim()
 
   const keysFromList = (process.env.GROQ_API_KEYS ?? '')
     .split(/[\n,]/g)
@@ -2117,6 +2205,7 @@ function getGroqApiKeys() {
     fallbackKeyTwo,
     fallbackKeyThree,
     fallbackKeyFour,
+    fallbackKeyFive,
     ...keysFromList,
   ]
     .map((value) => value.trim())
@@ -2602,6 +2691,7 @@ async function researchTopicInternal(
 ): Promise<ExtendedResearchBrief | ResearchFailure> {
   const canonicalTopic = sanitizeTopicCandidate(topic) || normalizeTopic(topic)
   const researchQueries = buildResearchQueries(canonicalTopic)
+  let allSearchHits: NewsSearchHit[] = []
   let searchHits: NewsSearchHit[] = []
   let staleHitsDropped = 0
 
@@ -2615,9 +2705,10 @@ async function researchTopicInternal(
     )
 
     const theNewsHits = await searchTheNewsApi(query)
-    const mergedTheNewsHits = mergeSearchHits(searchHits, theNewsHits)
+  const mergedTheNewsHits = mergeSearchHits(allSearchHits, theNewsHits)
+  allSearchHits = mergedTheNewsHits
     const recentTheNewsHits = filterSearchHitsByRecency(mergedTheNewsHits)
-    staleHitsDropped += mergedTheNewsHits.length - recentTheNewsHits.length
+  staleHitsDropped = mergedTheNewsHits.length - recentTheNewsHits.length
     searchHits = recentTheNewsHits
 
     if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
@@ -2639,9 +2730,10 @@ async function researchTopicInternal(
     )
 
     const newsApiHits = await searchNewsApi(query)
-    const mergedNewsApiHits = mergeSearchHits(searchHits, newsApiHits)
+  const mergedNewsApiHits = mergeSearchHits(allSearchHits, newsApiHits)
+  allSearchHits = mergedNewsApiHits
     const recentNewsApiHits = filterSearchHitsByRecency(mergedNewsApiHits)
-    staleHitsDropped += mergedNewsApiHits.length - recentNewsApiHits.length
+  staleHitsDropped = mergedNewsApiHits.length - recentNewsApiHits.length
     searchHits = recentNewsApiHits
 
     if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
@@ -2656,6 +2748,35 @@ async function researchTopicInternal(
   }
 
   if (searchHits.length < MIN_RESEARCH_KEY_FACTS) {
+    const staleFallbackResearch = buildFallbackResearchBrief(canonicalTopic, allSearchHits)
+    if (staleFallbackResearch) {
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Recent coverage was insufficient; using broader-source fallback research with ${staleFallbackResearch.sources.length} sources`
+      )
+
+      return staleFallbackResearch
+    }
+
+    const emergencyFallbackResearch = buildInsufficientDataEmergencyResearchBrief(
+      canonicalTopic,
+      allSearchHits,
+      `Insufficient recent research data for '${canonicalTopic}'`
+    )
+
+    if (emergencyFallbackResearch) {
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Using limited-source emergency fallback research for '${canonicalTopic}'`
+      )
+
+      return emergencyFallbackResearch
+    }
+
     const staleDropSuffix =
       staleHitsDropped > 0
         ? ` (${staleHitsDropped} stale sources older than ${MAX_RESEARCH_AGE_DAYS} days removed)`
@@ -2722,6 +2843,35 @@ async function researchTopicInternal(
 
     if (Object.keys(diagnostics.metrics).length > 0) {
       console.warn(`[research] normalize metrics: ${JSON.stringify(diagnostics.metrics)}`)
+    }
+
+    const modelFallbackResearch = buildFallbackResearchBrief(canonicalTopic, searchHits)
+    if (modelFallbackResearch) {
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Model brief failed validation; using source-derived fallback research with ${modelFallbackResearch.sources.length} sources`
+      )
+
+      return modelFallbackResearch
+    }
+
+    const emergencyFallbackResearch = buildInsufficientDataEmergencyResearchBrief(
+      canonicalTopic,
+      searchHits,
+      normalizeFailures
+    )
+
+    if (emergencyFallbackResearch) {
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Model brief failed validation; using limited-source emergency fallback for '${canonicalTopic}'`
+      )
+
+      return emergencyFallbackResearch
     }
 
     return {
@@ -2991,6 +3141,18 @@ function buildTestingQualityScore(): QualityScore {
     ledeStrength: 0,
     overallScore: 0,
     flaggedClaims: ['Fact-check bypassed (strict=false testing mode)'],
+    publishRecommendation: true,
+  }
+}
+
+function buildLimitedSourcesAutoPublishQualityScore(reason: string): QualityScore {
+  return {
+    sourceDiversity: 3,
+    sensationalism: 8,
+    factualConfidence: 3,
+    ledeStrength: 5,
+    overallScore: 4.8,
+    flaggedClaims: [sanitizeSentence(reason)],
     publishRecommendation: true,
   }
 }
@@ -3651,6 +3813,7 @@ export async function runPipeline(input: GenerateStoryInput) {
 
       const gradeDecision = assignResearchGrade(research)
       const gradeBadgeOverride = gradeDecision.limitedSources ? LIMITED_SOURCES_BADGE : undefined
+      const shouldAutoPublishLimitedSources = runtimeConfig.strictFactCheck && Boolean(gradeDecision.limitedSources)
       console.log(`Article grade: ${gradeDecision.grade} for ${score.topic}`)
 
       if (['A', 'B', 'C'].includes(gradeDecision.grade)) {
@@ -3694,15 +3857,21 @@ export async function runPipeline(input: GenerateStoryInput) {
       }
 
       if (draftResult.usedDeterministicFallback) {
-        summary.rejected += 1
-        logPipelineEvent(
-          'writing',
-          'failed',
-          score.topic,
-          `Rejected: ${score.topic} · Reason: deterministic fallback drafts are not publishable (${formatWriterFailure(draftResult.failure)})`,
-          68
-        )
-        continue
+        if (shouldAutoPublishLimitedSources) {
+          console.warn(
+            `[pipeline] using deterministic draft for limited-source auto-publish on topic '${score.topic}'`
+          )
+        } else {
+          summary.rejected += 1
+          logPipelineEvent(
+            'writing',
+            'failed',
+            score.topic,
+            `Rejected: ${score.topic} · Reason: deterministic fallback drafts are not publishable (${formatWriterFailure(draftResult.failure)})`,
+            68
+          )
+          continue
+        }
       }
 
       selectedDraft = draft
@@ -3715,18 +3884,28 @@ export async function runPipeline(input: GenerateStoryInput) {
         72
       )
 
-      if (!runtimeConfig.strictFactCheck) {
-        const testingQualityScore = buildTestingQualityScore()
+      if (!runtimeConfig.strictFactCheck || shouldAutoPublishLimitedSources) {
+        const isTestingBypass = !runtimeConfig.strictFactCheck
+        const bypassReason = isTestingBypass
+          ? 'Fact-check skipped (strict=false testing mode)'
+          : `Auto-published due to insufficient recent research coverage (${gradeDecision.reason || 'limited_sources'})`
+
+        const bypassQualityScore = isTestingBypass
+          ? buildTestingQualityScore()
+          : buildLimitedSourcesAutoPublishQualityScore(bypassReason)
+
         const article = await createArticleRecord(
           score.topic,
           research,
           draft,
-          testingQualityScore,
+          bypassQualityScore,
           gradeDecision.grade,
           pipelineRunId,
-          ['Fact-check skipped (strict=false testing mode)'],
+          [bypassReason],
           {
-            gradeBadgeOverride: TESTING_UNVERIFIED_BADGE,
+            gradeBadgeOverride: isTestingBypass
+              ? TESTING_UNVERIFIED_BADGE
+              : LIMITED_SOURCES_AUTOPUBLISH_BADGE,
             verificationStatusOverride: 'unverified',
           }
         )
@@ -3734,7 +3913,7 @@ export async function runPipeline(input: GenerateStoryInput) {
         await upsertArticlePersistent(article)
 
         selectedDraft = draft
-        selectedQualityScore = testingQualityScore
+        selectedQualityScore = bypassQualityScore
         selectedArticle = article
         selectedResearch = toPublicResearchBrief(research)
         selectedTopic = score.topic
@@ -3744,7 +3923,9 @@ export async function runPipeline(input: GenerateStoryInput) {
           'publish',
           'completed',
           article.headline,
-          `Published (strict=false): ${article.headline} · ${draft.wordCount} words · Grade ${gradeDecision.grade}`,
+          isTestingBypass
+            ? `Published (strict=false): ${article.headline} · ${draft.wordCount} words · Grade ${gradeDecision.grade}`
+            : `Published (limited-sources auto): ${article.headline} · ${draft.wordCount} words · Grade ${gradeDecision.grade}`,
           100
         )
 
@@ -3812,12 +3993,11 @@ export async function runPipeline(input: GenerateStoryInput) {
 
       if (!factCheck.pass) {
         summary.rejected += 1
-        const reason = factCheck.violations.join('; ') || 'Critical fact-check failure'
         logPipelineEvent(
           'quality-gate',
           'failed',
           score.topic,
-          `Rejected: ${score.topic} · Reason: ${reason}`
+          `Rejected: ${score.topic} · Reason: ${factCheck.violations.join('; ') || 'Critical fact-check failure'}`
         )
         continue
       }
