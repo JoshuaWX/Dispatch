@@ -47,8 +47,10 @@ const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
 const GROQ_RATE_LIMIT_COOLDOWN_MS = 30_000
 
 const RAW_TOPIC_LIMIT = 15
+const SCHEDULED_RAW_TOPIC_LIMIT = 4
 const MIN_TOPIC_SCORE = 60
 const MAX_RESEARCH_TOPICS = 5
+const SCHEDULED_MAX_RESEARCH_TOPICS = 2
 const MIN_KEY_FACTS = 2
 const MIN_RESEARCH_KEY_FACTS = 2
 const MIN_GRADE_CLAIMS = 2
@@ -3159,7 +3161,7 @@ function maybeTriggerAutonomousRun(articleCount: number, snapshot = getPipelineS
     return
   }
 
-  globalForPipeline.__dispatchAutoRunPromise = runPipeline({})
+  globalForPipeline.__dispatchAutoRunPromise = runPipeline({ scheduled: true })
     .then(() => undefined)
     .catch(() => undefined)
     .finally(() => {
@@ -3232,6 +3234,8 @@ export async function generateArticleDraft(topic: string) {
 
 export async function runPipeline(input: GenerateStoryInput) {
   const topicOverride = input.topic?.trim()
+  const isScheduledRun = input.scheduled === true && !topicOverride
+
   const runtimeConfig: PipelineRuntimeConfig = {
     strictFactCheck: input.strict !== false,
   }
@@ -3249,7 +3253,20 @@ export async function runPipeline(input: GenerateStoryInput) {
   markPipelineRunning(initialTopic)
 
   const ingested = await ingestTopics(topicOverride)
-  const rawTopics = dedupeSimilarTopics(ingested.rawTopics).slice(0, RAW_TOPIC_LIMIT)
+  const rawTopicLimit = isScheduledRun ? SCHEDULED_RAW_TOPIC_LIMIT : RAW_TOPIC_LIMIT
+  const maxResearchTopics = isScheduledRun ? SCHEDULED_MAX_RESEARCH_TOPICS : MAX_RESEARCH_TOPICS
+  const rawTopics = dedupeSimilarTopics(ingested.rawTopics).slice(0, rawTopicLimit)
+
+  if (isScheduledRun) {
+    logPipelineEvent(
+      'trend-intake',
+      'processing',
+      'Scheduled run',
+      `Scheduled mode active: scoring up to ${rawTopicLimit} topics and researching up to ${maxResearchTopics}`,
+      18
+    )
+  }
+
   summary.topicsIngested = rawTopics.length
 
   if (rawTopics.length === 0) {
@@ -3270,7 +3287,7 @@ export async function runPipeline(input: GenerateStoryInput) {
     const shortlisted = topicScores
       .filter((score) => score.totalScore >= MIN_TOPIC_SCORE)
       .sort((left, right) => right.totalScore - left.totalScore)
-      .slice(0, MAX_RESEARCH_TOPICS)
+      .slice(0, maxResearchTopics)
 
     summary.scoredAbove60 = topicScores.filter((score) => score.totalScore >= MIN_TOPIC_SCORE).length
     summary.rejected += topicScores.filter((score) => score.totalScore < MIN_TOPIC_SCORE).length
