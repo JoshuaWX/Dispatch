@@ -18,8 +18,6 @@ type ApiArticle = {
   qualityScore: { overallScore: number }
 }
 
-const MIN_IMAGE_CONFIDENCE = 7
-
 export default function ExplorePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategories, setSelectedCategories] = useState<string[]>([])
@@ -66,10 +64,7 @@ export default function ExplorePage() {
         description: article.subheadline || article.lede,
         category: article.category,
         categoryColor: (index % 3 === 0 ? 'secondary' : 'default') as const,
-        imageUrl:
-          article.qualityScore.overallScore >= MIN_IMAGE_CONFIDENCE
-            ? article.imageUrl
-            : undefined,
+        imageUrl: article.imageUrl,
         publishedAt: article.publishedAt,
         viewCount: Math.round(article.qualityScore.overallScore * 5000),
         sources: article.sources.map((source) => source.name),

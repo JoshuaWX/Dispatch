@@ -1,22 +1,25 @@
 import type { ArticleCategory } from '@/lib/dispatch-types'
 
-const categoryFallback: Record<ArticleCategory, { url: string; credit: string }> = {
-  World: {
-    url: 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=1600&h=900&fit=crop',
-    credit: 'Unsplash',
-  },
-  Tech: {
-    url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=1600&h=900&fit=crop',
-    credit: 'Unsplash',
-  },
-  Business: {
-    url: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7fbda3?w=1600&h=900&fit=crop',
-    credit: 'Unsplash',
-  },
-  Science: {
-    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=1600&h=900&fit=crop',
-    credit: 'Unsplash',
-  },
+function normalizeAbsoluteImageUrl(candidate: string) {
+  const trimmed = candidate.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    const resolved = new URL(trimmed)
+    if (!/^https?:$/.test(resolved.protocol)) {
+      return null
+    }
+
+    if (resolved.protocol === 'http:') {
+      resolved.protocol = 'https:'
+    }
+
+    return resolved.toString()
+  } catch {
+    return null
+  }
 }
 
 async function fetchWikipediaImage(topic: string) {
@@ -48,7 +51,7 @@ async function fetchWikipediaImage(topic: string) {
       title?: string
     }
 
-    const imageUrl = payload.thumbnail?.source?.trim()
+    const imageUrl = normalizeAbsoluteImageUrl(payload.thumbnail?.source ?? '')
     if (!imageUrl) {
       return null
     }
@@ -74,6 +77,10 @@ function resolveImageUrl(candidate: string, pageUrl: string) {
     const resolved = new URL(trimmed, pageUrl)
     if (!/^https?:$/.test(resolved.protocol)) {
       return null
+    }
+
+    if (resolved.protocol === 'http:') {
+      resolved.protocol = 'https:'
     }
 
     return resolved.toString()
@@ -170,11 +177,11 @@ async function fetchImageFromResearchSources(sourceUrls: string[]) {
 
 export async function resolveStoryImage(
   topic: string,
-  category: ArticleCategory,
+  _category: ArticleCategory,
   hintedImageUrl?: string | null,
   sourceUrls: string[] = []
 ) {
-  const hint = hintedImageUrl?.trim()
+  const hint = hintedImageUrl ? normalizeAbsoluteImageUrl(hintedImageUrl) : null
   if (hint) {
     return {
       imageUrl: hint,
@@ -192,9 +199,5 @@ export async function resolveStoryImage(
     return wikiImage
   }
 
-  const fallback = categoryFallback[category]
-  return {
-    imageUrl: fallback.url,
-    imageCredit: fallback.credit,
-  }
+  return null
 }
