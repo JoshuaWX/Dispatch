@@ -70,6 +70,9 @@ const SUBSTRING_DEDUPE_SIMILARITY = 0.92
 const MIN_TOKEN_OVERLAP_COUNT = 3
 const FACT_CORROBORATION_OVERLAP = 0.6
 const MATERIAL_CONFLICT_OVERLAP = 0.55
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+const MAX_RESEARCH_AGE_DAYS = 7
+const MAX_RESEARCH_AGE_MS = MAX_RESEARCH_AGE_DAYS * ONE_DAY_MS
 
 const SEED_TOPICS = [
   'AI regulation',
@@ -551,6 +554,69 @@ function mergeSearchHits(existing: NewsSearchHit[], incoming: NewsSearchHit[]) {
   }
 
   return merged
+}
+
+function parseSearchHitPublishedAt(value: string | undefined, now: number) {
+  const raw = value?.trim()
+  if (!raw) {
+    return null
+  }
+
+  const lower = raw.toLowerCase()
+  if (lower === 'today' || lower === 'just now') {
+    return now
+  }
+
+  if (lower === 'yesterday') {
+    return now - ONE_DAY_MS
+  }
+
+  const relativeMatch = lower.match(/^(\d+)\s*(minute|minutes|hour|hours|day|days)\s+ago$/)
+  if (relativeMatch) {
+    const amount = Number.parseInt(relativeMatch[1] ?? '0', 10)
+    const unit = relativeMatch[2] ?? ''
+    if (Number.isFinite(amount) && amount > 0) {
+      if (unit.startsWith('minute')) {
+        return now - amount * 60 * 1000
+      }
+
+      if (unit.startsWith('hour')) {
+        return now - amount * 60 * 60 * 1000
+      }
+
+      if (unit.startsWith('day')) {
+        return now - amount * ONE_DAY_MS
+      }
+    }
+  }
+
+  const timestamp = Date.parse(raw)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function isRecentSearchHit(hit: NewsSearchHit, now: number) {
+  const publishedAt = parseSearchHitPublishedAt(hit.publishedAt, now)
+  if (publishedAt === null) {
+    return false
+  }
+
+  if (publishedAt > now + 10 * 60 * 1000) {
+    return false
+  }
+
+  return now - publishedAt <= MAX_RESEARCH_AGE_MS
+}
+
+function filterSearchHitsByRecency(hits: NewsSearchHit[]) {
+  const now = Date.now()
+
+  return hits
+    .filter((hit) => isRecentSearchHit(hit, now))
+    .sort((left, right) => {
+      const leftPublishedAt = parseSearchHitPublishedAt(left.publishedAt, now) ?? 0
+      const rightPublishedAt = parseSearchHitPublishedAt(right.publishedAt, now) ?? 0
+      return rightPublishedAt - leftPublishedAt
+    })
 }
 
 function normalizeForCompare(value: string) {
@@ -2528,6 +2594,7 @@ async function researchTopicInternal(
   const canonicalTopic = sanitizeTopicCandidate(topic) || normalizeTopic(topic)
   const researchQueries = buildResearchQueries(canonicalTopic)
   let searchHits: NewsSearchHit[] = []
+  let staleHitsDropped = 0
 
   for (const query of researchQueries) {
     logPipelineEvent(
@@ -2539,14 +2606,17 @@ async function researchTopicInternal(
     )
 
     const theNewsHits = await searchTheNewsApi(query)
-    searchHits = mergeSearchHits(searchHits, theNewsHits)
+    const mergedTheNewsHits = mergeSearchHits(searchHits, theNewsHits)
+    const recentTheNewsHits = filterSearchHitsByRecency(mergedTheNewsHits)
+    staleHitsDropped += mergedTheNewsHits.length - recentTheNewsHits.length
+    searchHits = recentTheNewsHits
 
     if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
       logPipelineEvent(
         'research',
         'completed',
         canonicalTopic,
-        `Research found ${searchHits.length} articles for '${canonicalTopic}' (query='${query}')`
+        `Research found ${searchHits.length} recent articles for '${canonicalTopic}' (query='${query}')`
       )
       break
     }
@@ -2560,30 +2630,38 @@ async function researchTopicInternal(
     )
 
     const newsApiHits = await searchNewsApi(query)
-    searchHits = mergeSearchHits(searchHits, newsApiHits)
+    const mergedNewsApiHits = mergeSearchHits(searchHits, newsApiHits)
+    const recentNewsApiHits = filterSearchHitsByRecency(mergedNewsApiHits)
+    staleHitsDropped += mergedNewsApiHits.length - recentNewsApiHits.length
+    searchHits = recentNewsApiHits
 
     if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
       logPipelineEvent(
         'research',
         'completed',
         canonicalTopic,
-        `Research found ${searchHits.length} articles for '${canonicalTopic}' (query='${query}')`
+        `Research found ${searchHits.length} recent articles for '${canonicalTopic}' (query='${query}')`
       )
       break
     }
   }
 
   if (searchHits.length < MIN_RESEARCH_KEY_FACTS) {
+    const staleDropSuffix =
+      staleHitsDropped > 0
+        ? ` (${staleHitsDropped} stale sources older than ${MAX_RESEARCH_AGE_DAYS} days removed)`
+        : ''
+
     logPipelineEvent(
       'research',
       'failed',
       canonicalTopic,
-      `Insufficient research data for '${canonicalTopic}' — skipping`
+      `Insufficient recent research data for '${canonicalTopic}' — skipping${staleDropSuffix}`
     )
 
     return {
       error: 'insufficient_data',
-      reason: `TheNewsAPI and NewsAPI returned fewer than ${MIN_RESEARCH_KEY_FACTS} candidate sources across query variants`,
+      reason: `TheNewsAPI and NewsAPI returned fewer than ${MIN_RESEARCH_KEY_FACTS} candidate sources within ${MAX_RESEARCH_AGE_DAYS} days across query variants`,
     }
   }
 
@@ -3291,14 +3369,33 @@ export async function getTrendDigest() {
   return [...SEED_TOPICS]
 }
 
+function isUnsplashFallbackImage(article: Pick<PublishedArticle, 'imageUrl' | 'imageCredit'>) {
+  const url = article.imageUrl?.trim().toLowerCase() ?? ''
+  const credit = article.imageCredit?.trim().toLowerCase() ?? ''
+  return url.includes('images.unsplash.com/') || credit === 'unsplash'
+}
+
+function sanitizeArticleImage(article: PublishedArticle): PublishedArticle {
+  if (!isUnsplashFallbackImage(article)) {
+    return article
+  }
+
+  return {
+    ...article,
+    imageUrl: undefined,
+    imageCredit: undefined,
+  }
+}
+
 export async function getPublishedArticles() {
   const articles = await listArticlesPersistent()
   maybeTriggerAutonomousRun(articles.length)
-  return articles
+  return articles.map(sanitizeArticleImage)
 }
 
 export async function getPublishedArticle(articleId: string) {
-  return getArticleByIdPersistent(articleId)
+  const article = await getArticleByIdPersistent(articleId)
+  return article ? sanitizeArticleImage(article) : article
 }
 
 export async function getPipelineStatus() {
