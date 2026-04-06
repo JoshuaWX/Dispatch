@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
 type TickerArticle = {
@@ -57,6 +58,7 @@ export function NewsTicker() {
       .slice(0, 10)
       .map((article) => ({
         id: article.id,
+        href: `/article/${article.id}`,
         label: `${article.category.toUpperCase()}: ${article.headline}`,
       }))
 
@@ -66,7 +68,7 @@ export function NewsTicker() {
   const doubled = useMemo(() => [...items, ...items], [items])
 
   return (
-    <section className="news-ticker sticky top-0 z-30 border-y border-primary/30 bg-linear-to-r from-primary to-primary/90 text-primary-foreground shadow-[0_6px_18px_-10px_rgba(0,0,0,0.45)]">
+    <section className="news-ticker relative z-20 border-y border-primary/30 bg-linear-to-r from-primary to-primary/90 text-primary-foreground shadow-[0_6px_18px_-10px_rgba(0,0,0,0.45)]">
       <div className="mx-auto flex max-w-7xl items-center gap-4 px-3 py-2 sm:px-6">
         <span className="shrink-0 rounded-sm bg-primary-foreground/15 px-2 py-1 text-[10px] font-bold tracking-[0.2em] sm:text-xs">
           LIVE
@@ -75,14 +77,26 @@ export function NewsTicker() {
         <div className="relative min-w-0 flex-1 overflow-hidden">
           <div className="news-ticker-track flex w-max min-w-full items-center whitespace-nowrap pr-6">
             {doubled.map((item, index) => (
-              <span
-                key={`${item.id}-${index}`}
-                className="inline-flex items-center text-xs font-semibold tracking-wide sm:text-sm"
-              >
-                <span className="mr-3 inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground/85" />
-                {item.label}
-                <span className="mx-4 text-primary-foreground/60">//</span>
-              </span>
+              item.id.startsWith('fallback-') ? (
+                <span
+                  key={`${item.id}-${index}`}
+                  className="inline-flex items-center text-xs font-semibold tracking-wide sm:text-sm"
+                >
+                  <span className="mr-3 inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground/85" />
+                  {item.label}
+                  <span className="mx-4 text-primary-foreground/60">//</span>
+                </span>
+              ) : (
+                <Link
+                  key={`${item.id}-${index}`}
+                  href={item.href}
+                  className="inline-flex items-center text-xs font-semibold tracking-wide text-primary-foreground no-underline hover:text-primary-foreground/85 hover:underline sm:text-sm"
+                >
+                  <span className="mr-3 inline-block h-1.5 w-1.5 rounded-full bg-primary-foreground/85" />
+                  {item.label}
+                  <span className="mx-4 text-primary-foreground/60">//</span>
+                </Link>
+              )
             ))}
           </div>
         </div>

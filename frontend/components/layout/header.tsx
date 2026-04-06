@@ -12,14 +12,54 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from 'next-themes'
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
+
+type PipelineStatus = {
+  status?: 'idle' | 'running' | 'degraded'
+  updatedAt?: string
+}
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
+  const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>({ status: 'idle' })
   const { setTheme, resolvedTheme, theme } = useTheme()
+  const pathname = usePathname()
 
   useEffect(() => {
     setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadPipelineStatus = async () => {
+      try {
+        const response = await fetch('/api/pipeline/status', { cache: 'no-store' })
+        if (!response.ok) {
+          return
+        }
+
+        const json = (await response.json()) as PipelineStatus
+        if (mounted) {
+          setPipelineStatus({ status: json.status ?? 'idle', updatedAt: json.updatedAt })
+        }
+      } catch {
+        if (mounted) {
+          setPipelineStatus({ status: 'idle' })
+        }
+      }
+    }
+
+    void loadPipelineStatus()
+    const timer = window.setInterval(() => {
+      void loadPipelineStatus()
+    }, 20000)
+
+    return () => {
+      mounted = false
+      window.clearInterval(timer)
+    }
   }, [])
 
   const currentTheme = theme === 'system' ? resolvedTheme : theme
@@ -29,14 +69,36 @@ export function Header() {
     day: 'numeric',
   }).format(new Date())
 
+  const statusLabel = pipelineStatus.status === 'running'
+    ? 'Running'
+    : pipelineStatus.status === 'degraded'
+      ? 'Degraded'
+      : 'Idle'
+
+  const statusClassName = pipelineStatus.status === 'running'
+    ? 'bg-emerald-500/20 text-emerald-200 border-emerald-300/30'
+    : pipelineStatus.status === 'degraded'
+      ? 'bg-amber-500/20 text-amber-100 border-amber-300/35'
+      : 'bg-primary text-primary-foreground border-primary/40'
+
+  const navLinkClass = (href: string) => {
+    const isActive = href === '/' ? pathname === '/' : pathname.startsWith(href)
+    return `text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold transition-colors no-underline decoration-2 underline-offset-10 ${
+      isActive
+        ? 'text-foreground underline'
+        : 'text-foreground/80 hover:text-foreground hover:underline'
+    }`
+  }
+
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur-sm">
       <div className="border-b border-border bg-foreground text-background">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-8 flex items-center justify-between text-[11px] tracking-wide">
           <span className="uppercase font-semibold text-background/80">Global Edition</span>
           <span className="hidden sm:inline text-background/70">{todayLabel}</span>
-          <span className="uppercase font-semibold text-primary-foreground bg-primary px-2 py-0.5 rounded-sm">
-            Live Desk
+          <span className={`inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 uppercase font-semibold ${statusClassName}`}>
+            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+            {`Live Desk ${statusLabel}`}
           </span>
         </div>
       </div>
@@ -55,19 +117,19 @@ export function Header() {
           <nav className="hidden md:flex items-center gap-6 lg:gap-8">
             <Link
               href="/"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
+              className={navLinkClass('/')}
             >
               Front Page
             </Link>
             <Link
               href="/explore"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
+              className={navLinkClass('/explore')}
             >
               Explore
             </Link>
             <Link
               href="/pipeline"
-              className="text-xs lg:text-sm uppercase tracking-[0.18em] font-semibold text-foreground/90 hover:text-foreground transition-colors no-underline hover:underline decoration-2 underline-offset-10"
+              className={navLinkClass('/pipeline')}
             >
               Pipeline
             </Link>
@@ -109,12 +171,8 @@ export function Header() {
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button
-              variant="outline"
-              size="sm"
-              className="hidden sm:inline-flex uppercase tracking-wider"
-            >
-              Sign In
+            <Button variant="outline" size="sm" className="hidden sm:inline-flex uppercase tracking-wider" asChild>
+              <Link href="/explore">Latest Briefing</Link>
             </Button>
             <Button
               variant="ghost"
@@ -132,19 +190,25 @@ export function Header() {
           <nav className="md:hidden pb-4 pt-2 space-y-1 border-t border-border">
             <Link
               href="/"
-              className="block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold text-foreground hover:bg-muted rounded-md no-underline"
+              className={`block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold rounded-md no-underline ${
+                pathname === '/' ? 'bg-muted text-foreground' : 'text-foreground hover:bg-muted'
+              }`}
             >
               Front Page
             </Link>
             <Link
               href="/explore"
-              className="block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold text-foreground hover:bg-muted rounded-md no-underline"
+              className={`block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold rounded-md no-underline ${
+                pathname.startsWith('/explore') ? 'bg-muted text-foreground' : 'text-foreground hover:bg-muted'
+              }`}
             >
               Explore
             </Link>
             <Link
               href="/pipeline"
-              className="block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold text-foreground hover:bg-muted rounded-md no-underline"
+              className={`block px-3 py-2 text-xs uppercase tracking-[0.16em] font-semibold rounded-md no-underline ${
+                pathname.startsWith('/pipeline') ? 'bg-muted text-foreground' : 'text-foreground hover:bg-muted'
+              }`}
             >
               Pipeline
             </Link>

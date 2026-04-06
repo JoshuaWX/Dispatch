@@ -111,6 +111,32 @@ export function HomePage() {
           </p>
         </div>
 
+        <section className="mb-10 rounded-sm border border-border bg-card/70 p-4 sm:p-6">
+          <h2 className="mb-4 text-base font-semibold uppercase tracking-[0.16em] text-foreground/85 sm:text-lg">
+            How Dispatch Works
+          </h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+            <div className="rounded-sm border border-border bg-background/65 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">01 Research</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Cross-source fact gathering with structured evidence extraction.
+              </p>
+            </div>
+            <div className="rounded-sm border border-border bg-background/65 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">02 Write</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Reported article drafting with attribution and newsroom tone.
+              </p>
+            </div>
+            <div className="rounded-sm border border-border bg-background/65 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">03 Quality Gate</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Only stories that pass confidence and sourcing checks are published.
+              </p>
+            </div>
+          </div>
+        </section>
+
         <div className="mb-16">
           {featuredArticle ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
