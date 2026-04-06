@@ -102,40 +102,18 @@ export function HomePage() {
 
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
         <div className="mb-12">
+          <p className="mb-4 inline-flex rounded-sm border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
+            Real-time autonomous newsroom
+          </p>
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-4">
-            The Future of <span className="text-primary">Autonomous Journalism</span>
+            Breaking News, Built for the <span className="text-primary">Trust Era</span>
           </h1>
           <p className="text-lg sm:text-xl text-muted-foreground text-balance max-w-2xl">
-            Discover AI-curated news with complete source transparency. Every story, verified.
-            Every source, visible. Every claim, trackable.
+            DISPATCH turns signal into verified reporting in minutes, not cycles. Readers get
+            source-linked facts, accountable context, and publication-grade clarity from an AI
+            newsroom that never sleeps.
           </p>
         </div>
-
-        <section className="mb-10 rounded-sm border border-border bg-card/70 p-4 sm:p-6">
-          <h2 className="mb-4 text-base font-semibold uppercase tracking-[0.16em] text-foreground/85 sm:text-lg">
-            How Dispatch Works
-          </h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-            <div className="rounded-sm border border-border bg-background/65 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">01 Research</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Cross-source fact gathering with structured evidence extraction.
-              </p>
-            </div>
-            <div className="rounded-sm border border-border bg-background/65 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">02 Write</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Reported article drafting with attribution and newsroom tone.
-              </p>
-            </div>
-            <div className="rounded-sm border border-border bg-background/65 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">03 Quality Gate</p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Only stories that pass confidence and sourcing checks are published.
-              </p>
-            </div>
-          </div>
-        </section>
 
         <div className="mb-16">
           {featuredArticle ? (
@@ -228,6 +206,32 @@ export function HomePage() {
 
       <section className="bg-linear-to-br from-primary/10 via-foreground/3 to-transparent border-t border-border py-12 sm:py-16">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <section className="mb-10 rounded-sm border border-border bg-card/70 p-4 text-left sm:p-6">
+            <h2 className="mb-4 text-base font-semibold uppercase tracking-[0.16em] text-foreground/85 sm:text-lg">
+              How Dispatch Works
+            </h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+              <div className="rounded-sm border border-border bg-background/65 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">01 Research</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Cross-source fact gathering with structured evidence extraction.
+                </p>
+              </div>
+              <div className="rounded-sm border border-border bg-background/65 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">02 Write</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Reported article drafting with attribution and newsroom tone.
+                </p>
+              </div>
+              <div className="rounded-sm border border-border bg-background/65 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">03 Quality Gate</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Only stories that pass confidence and sourcing checks are published.
+                </p>
+              </div>
+            </div>
+          </section>
+
           <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Get News You Can Trust</h2>
           <p className="text-lg text-muted-foreground mb-8">
             Sign up for personalized news briefings curated by AI with full source transparency.

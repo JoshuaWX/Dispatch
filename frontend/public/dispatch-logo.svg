@@ -1,26 +1,26 @@
-<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="980" height="260" viewBox="0 0 980 260" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <clipPath id="bowl-clip">
-      <rect x="77.5" y="0" width="180" height="180" />
+      <rect x="154" y="0" width="980" height="260" />
     </clipPath>
   </defs>
 
   <style>
     .bg { fill: #FFFFFF; }
     .mark { fill: #DC2626; }
-    .gap { stroke: #FFFFFF; stroke-width: 6; stroke-linejoin: miter; stroke-linecap: butt; }
-    
+    .gap { stroke: #FFFFFF; stroke-width: 9.6; stroke-linejoin: miter; stroke-linecap: butt; }
+    .text { fill: #111827; font-family: Georgia, "Times New Roman", serif; font-weight: 700; font-size: 110px; letter-spacing: 0.18em; }
     @media (prefers-color-scheme: dark) {
       .bg { fill: #000000; }
       .mark { fill: #FFFFFF; }
       .gap { stroke: #000000; }
-      
+      .text { fill: #FFFFFF; }
     }
   </style>
 
-  <rect width="180" height="180" class="bg"/>
+  <rect width="980" height="260" class="bg"/>
 
-  <g transform="translate(-2.5, 0) scale(1)">
+  <g transform="translate(26, -14) scale(1.6)">
     <!-- 1. Full D (Back) -->
     <path class="mark" fill-rule="evenodd" d="M40 40H90L140 90L90 140H40V40ZM70 70V110H90L110 90L90 70H70Z"/>
     
@@ -37,5 +37,5 @@
     <path class="mark" fill-rule="evenodd" clip-path="url(#bowl-clip)" d="M40 40H90L140 90L90 140H40V40ZM70 70V110H90L110 90L90 70H70Z"/>
   </g>
 
-  
+  <text x="320" y="165" class="text" text-anchor="start">DISPATCH</text>
 </svg>

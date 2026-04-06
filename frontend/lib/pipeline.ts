@@ -44,6 +44,7 @@ const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-
 const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL ?? 'llama-3.3-70b-versatile'
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? 'google/gemma-3-27b-it:free'
 const AI_PROVIDER = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
+const GROQ_RATE_LIMIT_COOLDOWN_MS = 30_000
 
 const RAW_TOPIC_LIMIT = 15
 const MIN_TOPIC_SCORE = 60
@@ -344,6 +345,35 @@ type QualityGateOutcome = {
 
 const globalForPipeline = globalThis as typeof globalThis & {
   __dispatchAutoRunPromise?: Promise<void>
+  __dispatchGroqRateLimitUntilByKey?: Map<string, number>
+}
+
+function getGroqRateLimitMap() {
+  if (!globalForPipeline.__dispatchGroqRateLimitUntilByKey) {
+    globalForPipeline.__dispatchGroqRateLimitUntilByKey = new Map<string, number>()
+  }
+
+  return globalForPipeline.__dispatchGroqRateLimitUntilByKey
+}
+
+function getRetryAfterMs(response: Response) {
+  const header = response.headers.get('retry-after')?.trim()
+  if (!header) {
+    return GROQ_RATE_LIMIT_COOLDOWN_MS
+  }
+
+  const asSeconds = Number(header)
+  if (Number.isFinite(asSeconds) && asSeconds > 0) {
+    return Math.max(1_000, Math.round(asSeconds * 1_000))
+  }
+
+  const asDate = Date.parse(header)
+  if (!Number.isNaN(asDate)) {
+    const delta = asDate - Date.now()
+    return Math.max(1_000, delta)
+  }
+
+  return GROQ_RATE_LIMIT_COOLDOWN_MS
 }
 
 function extractJsonCandidate(raw: string) {
@@ -1887,9 +1917,20 @@ async function callGroq(system: string, payload: object) {
     return null
   }
 
+  const rateLimitUntilByKey = getGroqRateLimitMap()
+  const now = Date.now()
+  let attemptedRequest = false
+
   try {
     for (let index = 0; index < apiKeys.length; index += 1) {
       const apiKey = apiKeys[index]
+      const rateLimitUntil = rateLimitUntilByKey.get(apiKey) ?? 0
+
+      if (rateLimitUntil > now) {
+        continue
+      }
+
+      attemptedRequest = true
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -1927,6 +1968,11 @@ async function callGroq(system: string, payload: object) {
         const messagePart = errorMessage ? `: ${errorMessage}` : ''
         console.warn(`[callGroq] failed with status ${response.status}${messagePart}`)
 
+        if (response.status === 429) {
+          const retryAfterMs = getRetryAfterMs(response)
+          rateLimitUntilByKey.set(apiKey, Date.now() + retryAfterMs)
+        }
+
         const isLastKey = index >= apiKeys.length - 1
         if (isLastKey || !shouldTryNextGroqKey(response.status)) {
           return null
@@ -1948,6 +1994,10 @@ async function callGroq(system: string, payload: object) {
       if (isLastKey) {
         return null
       }
+    }
+
+    if (!attemptedRequest) {
+      console.warn('[callGroq] all configured Groq keys are cooling down after rate limits')
     }
 
     return null

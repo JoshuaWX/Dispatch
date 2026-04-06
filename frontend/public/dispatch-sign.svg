@@ -1,14 +1,14 @@
-<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <clipPath id="bowl-clip">
-      <rect x="77.5" y="0" width="180" height="180" />
+      <rect x="226" y="0" width="512" height="512" />
     </clipPath>
   </defs>
 
   <style>
     .bg { fill: #FFFFFF; }
     .mark { fill: #DC2626; }
-    .gap { stroke: #FFFFFF; stroke-width: 6; stroke-linejoin: miter; stroke-linecap: butt; }
+    .gap { stroke: #FFFFFF; stroke-width: 14.4; stroke-linejoin: miter; stroke-linecap: butt; }
     
     @media (prefers-color-scheme: dark) {
       .bg { fill: #000000; }
@@ -18,9 +18,9 @@
     }
   </style>
 
-  <rect width="180" height="180" class="bg"/>
+  <rect width="512" height="512" class="bg"/>
 
-  <g transform="translate(-2.5, 0) scale(1)">
+  <g transform="translate(34, 40) scale(2.4)">
     <!-- 1. Full D (Back) -->
     <path class="mark" fill-rule="evenodd" d="M40 40H90L140 90L90 140H40V40ZM70 70V110H90L110 90L90 70H70Z"/>
     

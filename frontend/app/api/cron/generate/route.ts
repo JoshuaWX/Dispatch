@@ -32,8 +32,12 @@ export async function GET(request: Request) {
   }
 
   try {
+    const requestUrl = new URL(request.url)
+    const strictParam = requestUrl.searchParams.get('strict')
+    const strict = strictParam === 'true'
+
     console.log('[CRON] Starting generation. AI_PROVIDER:', process.env.AI_PROVIDER || 'not set', 'GROQ_KEY present:', !!process.env.GROQ_API_KEY)
-    const result = await runPipeline({})
+    const result = await runPipeline({ strict })
     console.log('[CRON] Result - published:', result.published, 'topic:', result.topic, 'research error:', result.research?.error)
     return NextResponse.json({
       ok: true,
