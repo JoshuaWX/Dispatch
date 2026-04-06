@@ -12,7 +12,7 @@
     
     @media (prefers-color-scheme: dark) {
       .bg { fill: #000000; }
-      .mark { fill: #FFFFFF; }
+      /* removed */
       .gap { stroke: #000000; }
       
     }

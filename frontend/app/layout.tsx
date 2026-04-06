@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   keywords: ['news', 'AI', 'journalism', 'transparency', 'sources'],
   authors: [{ name: 'DISPATCH' }],
   icons: {
-    icon: '/icon.svg',
+    icon: '/dispatch-sign.svg',
     apple: '/apple-icon.png',
   },
 }

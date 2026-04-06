@@ -10,7 +10,6 @@
     .gap { stroke: oklch(0.985 0 0); stroke-width: 9.6; stroke-linejoin: miter; stroke-linecap: butt; }
     .text { fill: oklch(0.16 0 0); font-family: Georgia, "Times New Roman", serif; font-weight: 700; font-size: 110px; letter-spacing: 0.18em; }
     @media (prefers-color-scheme: dark) {
-      .mark { fill: oklch(0.95 0 0); }
       .gap { stroke: oklch(0.13 0 0); }
       .text { fill: oklch(0.95 0 0); }
     }
