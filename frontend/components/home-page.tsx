@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArticleCard } from '@/components/article-card'
 import { NewsTicker } from '@/components/news-ticker'
 import { TrustStrip } from '@/components/trust-strip'
+import { Spinner } from '@/components/ui/spinner'
 
 type ApiArticle = {
   id: string
@@ -25,6 +26,7 @@ type ApiArticle = {
 
 export function HomePage() {
   const [articles, setArticles] = useState<ApiArticle[]>([])
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     let mounted = true
@@ -32,13 +34,29 @@ export function HomePage() {
     const loadArticles = async () => {
       try {
         const response = await fetch('/api/articles', { cache: 'no-store' })
-        if (!response.ok) return
+        if (!mounted) {
+          return
+        }
+
+        if (!response.ok) {
+          setArticles([])
+          return
+        }
+
         const json = (await response.json()) as { articles?: ApiArticle[] }
-        if (mounted && Array.isArray(json.articles)) {
+        if (Array.isArray(json.articles)) {
           setArticles(json.articles)
+        } else {
+          setArticles([])
         }
       } catch {
-        setArticles([])
+        if (mounted) {
+          setArticles([])
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -149,6 +167,14 @@ export function HomePage() {
                 </div>
               </div>
             </div>
+          ) : isLoading ? (
+            <div className="bg-card rounded-lg border border-border p-10 text-center">
+              <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-full border border-border p-3">
+                <Spinner className="size-5 text-primary" />
+              </div>
+              <h3 className="text-xl font-semibold text-foreground mb-2">Loading stories...</h3>
+              <p className="text-muted-foreground">The live desk is pulling the latest published articles.</p>
+            </div>
           ) : (
             <div className="bg-card rounded-lg border border-border p-8 text-center">
               <h3 className="text-xl font-semibold text-foreground mb-2">No generated stories yet</h3>
@@ -232,17 +258,20 @@ export function HomePage() {
             </div>
           </section>
 
-          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Stay Ahead Of The Story</h2>
+          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Get News You Can Trust</h2>
           <p className="text-lg text-muted-foreground mb-8">
-            Follow the live desk and explore verified reporting with full source transparency.
+            Sign up for personalized news briefings curated by AI with full source transparency.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button className="px-8 py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition-colors">
-              Explore Stories
+              Subscribe Now
             </button>
-            <button className="px-8 py-3 border border-primary text-primary rounded-lg font-semibold hover:bg-primary/10 transition-colors">
-              See Pipeline
-            </button>
+            <Link
+              href="/explore"
+              className="px-8 py-3 border border-primary text-primary rounded-lg font-semibold hover:bg-primary/10 transition-colors no-underline"
+            >
+              Learn More
+            </Link>
           </div>
         </div>
       </section>
