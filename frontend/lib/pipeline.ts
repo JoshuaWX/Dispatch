@@ -50,7 +50,9 @@ const RAW_TOPIC_LIMIT = 15
 const SCHEDULED_RAW_TOPIC_LIMIT = 4
 const MIN_TOPIC_SCORE = 60
 const MAX_RESEARCH_TOPICS = 5
-const SCHEDULED_MAX_RESEARCH_TOPICS = 2
+const SCHEDULED_MAX_RESEARCH_TOPICS = 4
+const SCHEDULED_SEED_FALLBACK_TOPICS = 2
+const MAX_RESEARCH_QUERY_VARIANTS = 4
 const MIN_KEY_FACTS = 2
 const MIN_RESEARCH_KEY_FACTS = 2
 const MIN_GRADE_CLAIMS = 2
@@ -142,6 +144,52 @@ const TOKEN_STOPWORDS = new Set([
   'update',
   'updates',
   'global',
+])
+
+const TOPIC_ATTRIBUTION_HINTS = [
+  'reuters',
+  'associated press',
+  'ap',
+  'bbc',
+  'cnn',
+  'nbc',
+  'abc',
+  'cbs',
+  'fox',
+  'deadline',
+  'bloomberg',
+  'forbes',
+  'politico',
+  'axios',
+  'guardian',
+  'new york times',
+  'nyt',
+  'washington post',
+  'wall street journal',
+  'wsj',
+  'al jazeera',
+  'npr',
+]
+
+const QUERY_NOISE_TOKENS = new Set([
+  ...Array.from(TOKEN_STOPWORDS),
+  'call',
+  'calls',
+  'called',
+  'amid',
+  'against',
+  'after',
+  'before',
+  'over',
+  'under',
+  'from',
+  'with',
+  'without',
+  'video',
+  'watch',
+  'live',
+  'update',
+  'updates',
 ])
 
 const RESOLUTION_HINTS = [
@@ -410,6 +458,99 @@ function parseJsonObject<T>(raw: string | null): T | null {
 
 function normalizeTopic(value: string) {
   return value.trim().replace(/\s+/g, ' ')
+}
+
+function stripTopicAttributionSuffix(topic: string) {
+  const match = topic.match(/^(.*?)(?:\s*[|–—-]\s*)([^|–—-]{2,48})$/)
+  if (!match) {
+    return topic
+  }
+
+  const lead = normalizeTopic(match[1] ?? '')
+  const tail = normalizeTopic(match[2] ?? '')
+  if (!lead || !tail) {
+    return topic
+  }
+
+  const tailLower = tail.toLowerCase()
+  const tailTokens = tailLower.split(' ').filter(Boolean)
+  const looksLikeAttribution =
+    TOPIC_ATTRIBUTION_HINTS.some((hint) => tailLower.includes(hint)) || tailTokens.length <= 3
+
+  if (!looksLikeAttribution || lead.split(' ').length < 3) {
+    return topic
+  }
+
+  return lead
+}
+
+function sanitizeTopicCandidate(value: string) {
+  let topic = normalizeTopic(value)
+  if (!topic) {
+    return ''
+  }
+
+  topic = stripTopicAttributionSuffix(topic)
+  topic = topic.replace(/\s*\((video|photos?|watch live|live updates?)\)\s*$/i, '')
+  topic = topic.replace(/\s*\[[^\]]+\]\s*$/g, '')
+  topic = topic.replace(/[“”]/g, '"')
+  topic = topic.replace(/[‘’]/g, "'")
+
+  return normalizeTopic(topic)
+}
+
+function buildResearchQueries(topic: string) {
+  const normalized = sanitizeTopicCandidate(topic)
+  if (!normalized) {
+    return []
+  }
+
+  const colonIndex = normalized.indexOf(':')
+  const preColon =
+    colonIndex > 0
+      ? sanitizeTopicCandidate(normalized.slice(0, colonIndex))
+      : ''
+
+  const compactTokenQuery = normalizeForCompare(normalized)
+    .split(' ')
+    .filter((token) => token.length >= 4 && !QUERY_NOISE_TOKENS.has(token))
+    .slice(0, 7)
+    .join(' ')
+
+  return Array.from(
+    new Set(
+      [
+        normalized,
+        preColon,
+        normalized.replace(/["']/g, ''),
+        compactTokenQuery,
+      ]
+        .map((query) => normalizeTopic(query))
+        .filter(Boolean)
+    )
+  ).slice(0, MAX_RESEARCH_QUERY_VARIANTS)
+}
+
+function mergeSearchHits(existing: NewsSearchHit[], incoming: NewsSearchHit[]) {
+  const merged = [...existing]
+  const seen = new Set<string>()
+
+  for (const hit of merged) {
+    const key = `${normalizeSourceUrl(hit.url)}|${normalizeForCompare(hit.title)}`
+    seen.add(key)
+  }
+
+  for (const hit of incoming) {
+    const key = `${normalizeSourceUrl(hit.url)}|${normalizeForCompare(hit.title)}`
+    if (seen.has(key)) {
+      continue
+    }
+
+    seen.add(key)
+    merged.push(hit)
+  }
+
+  return merged
 }
 
 function normalizeForCompare(value: string) {
@@ -2245,8 +2386,9 @@ function logPipelineEvent(
 
 async function ingestTopics(topicOverride?: string): Promise<IngestResult> {
   if (topicOverride?.trim()) {
+    const manualTopic = sanitizeTopicCandidate(topicOverride.trim()) || normalizeTopic(topicOverride)
     return {
-      rawTopics: dedupeSimilarTopics([topicOverride.trim()]).slice(0, RAW_TOPIC_LIMIT),
+      rawTopics: dedupeSimilarTopics([manualTopic]).slice(0, RAW_TOPIC_LIMIT),
       source: 'manual',
     }
   }
@@ -2330,7 +2472,10 @@ async function ingestTopics(topicOverride?: string): Promise<IngestResult> {
     source = 'seed'
   }
 
-  const rawTopics = dedupeSimilarTopics(selected).slice(0, RAW_TOPIC_LIMIT)
+  const rawTopics = dedupeSimilarTopics(selected.map((topic) => sanitizeTopicCandidate(topic)).filter(Boolean)).slice(
+    0,
+    RAW_TOPIC_LIMIT
+  )
   return {
     rawTopics,
     source,
@@ -2343,19 +2488,21 @@ async function scoreTopic(topic: string): Promise<TopicScoreCard> {
   return parsed ?? fallbackTopicScore(topic)
 }
 
-async function scoreTopics(rawTopics: string[]) {
+async function scoreTopics(rawTopics: string[], useModelScoring = true) {
   logPipelineEvent(
     'trend-intake',
     'processing',
     'Topic scoring',
-    `Scoring ${rawTopics.length} topics...`,
+    useModelScoring
+      ? `Scoring ${rawTopics.length} topics...`
+      : `Scoring ${rawTopics.length} topics with deterministic fallback mode...`,
     20
   )
 
   const scores: TopicScoreCard[] = []
 
   for (const topic of rawTopics) {
-    const score = await scoreTopic(topic)
+    const score = useModelScoring ? await scoreTopic(topic) : fallbackTopicScore(topic)
     scores.push(score)
 
     const details =
@@ -2378,25 +2525,51 @@ async function scoreTopics(rawTopics: string[]) {
 async function researchTopicInternal(
   topic: string
 ): Promise<ExtendedResearchBrief | ResearchFailure> {
-  logPipelineEvent('research', 'processing', topic, `Researching '${topic}' via TheNewsAPI...`, 45)
+  const canonicalTopic = sanitizeTopicCandidate(topic) || normalizeTopic(topic)
+  const researchQueries = buildResearchQueries(canonicalTopic)
+  let searchHits: NewsSearchHit[] = []
 
-  let searchHits = await searchTheNewsApi(topic)
-
-  if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
-    logPipelineEvent('research', 'completed', topic, `Research found ${searchHits.length} articles for '${topic}'`)
-  } else {
+  for (const query of researchQueries) {
     logPipelineEvent(
       'research',
       'processing',
-      topic,
-      `Research fallback: trying NewsAPI for '${topic}'...`,
+      canonicalTopic,
+      `Researching '${canonicalTopic}' via TheNewsAPI (query='${query}')...`,
+      45
+    )
+
+    const theNewsHits = await searchTheNewsApi(query)
+    searchHits = mergeSearchHits(searchHits, theNewsHits)
+
+    if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Research found ${searchHits.length} articles for '${canonicalTopic}' (query='${query}')`
+      )
+      break
+    }
+
+    logPipelineEvent(
+      'research',
+      'processing',
+      canonicalTopic,
+      `Research fallback: trying NewsAPI (query='${query}')...`,
       46
     )
 
-    searchHits = await searchNewsApi(topic)
+    const newsApiHits = await searchNewsApi(query)
+    searchHits = mergeSearchHits(searchHits, newsApiHits)
 
     if (searchHits.length >= MIN_RESEARCH_KEY_FACTS) {
-      logPipelineEvent('research', 'completed', topic, `Research found ${searchHits.length} articles for '${topic}'`)
+      logPipelineEvent(
+        'research',
+        'completed',
+        canonicalTopic,
+        `Research found ${searchHits.length} articles for '${canonicalTopic}' (query='${query}')`
+      )
+      break
     }
   }
 
@@ -2404,18 +2577,18 @@ async function researchTopicInternal(
     logPipelineEvent(
       'research',
       'failed',
-      topic,
-      `Insufficient research data for '${topic}' — skipping`
+      canonicalTopic,
+      `Insufficient research data for '${canonicalTopic}' — skipping`
     )
 
     return {
       error: 'insufficient_data',
-      reason: 'TheNewsAPI and NewsAPI returned fewer than 2 candidate sources',
+      reason: `TheNewsAPI and NewsAPI returned fewer than ${MIN_RESEARCH_KEY_FACTS} candidate sources across query variants`,
     }
   }
 
   const modelResult = await callModelWithProvider(RESEARCH_BRIEF_PROMPT, {
-    topic,
+    topic: canonicalTopic,
     searchResults: searchHits,
   })
   const modelOutput = modelResult.output
@@ -2436,7 +2609,7 @@ async function researchTopicInternal(
   }
 
   const diagnostics: ResearchNormalizationDiagnostics = { failures: [], metrics: {} }
-  const research = normalizeResearchBrief(topic, parsed, searchHits, diagnostics)
+  const research = normalizeResearchBrief(canonicalTopic, parsed, searchHits, diagnostics)
 
   if (!research) {
     const rawOutputLength = modelOutput?.length ?? 0
@@ -3283,16 +3456,49 @@ export async function runPipeline(input: GenerateStoryInput) {
   let selectedArticle: PublishedArticle | null = null
 
   try {
-    const topicScores = await scoreTopics(rawTopics)
+    const useModelScoring = !isScheduledRun
+    const topicScores = await scoreTopics(rawTopics, useModelScoring)
     const shortlisted = topicScores
       .filter((score) => score.totalScore >= MIN_TOPIC_SCORE)
       .sort((left, right) => right.totalScore - left.totalScore)
       .slice(0, maxResearchTopics)
 
+    const researchQueue = [...shortlisted]
+
+    if (isScheduledRun) {
+      const existingTopics = new Set(researchQueue.map((score) => normalizeForCompare(score.topic)))
+      let addedSeedFallbacks = 0
+
+      for (const seedTopic of SEED_TOPICS) {
+        if (addedSeedFallbacks >= SCHEDULED_SEED_FALLBACK_TOPICS) {
+          break
+        }
+
+        const normalizedSeed = normalizeForCompare(seedTopic)
+        if (!normalizedSeed || existingTopics.has(normalizedSeed)) {
+          continue
+        }
+
+        researchQueue.push(fallbackTopicScore(seedTopic))
+        existingTopics.add(normalizedSeed)
+        addedSeedFallbacks += 1
+      }
+
+      if (addedSeedFallbacks > 0) {
+        logPipelineEvent(
+          'trend-intake',
+          'processing',
+          'Scheduled run',
+          `Added ${addedSeedFallbacks} resilient seed-topic fallbacks for scheduled run`,
+          24
+        )
+      }
+    }
+
     summary.scoredAbove60 = topicScores.filter((score) => score.totalScore >= MIN_TOPIC_SCORE).length
     summary.rejected += topicScores.filter((score) => score.totalScore < MIN_TOPIC_SCORE).length
 
-    if (shortlisted.length === 0) {
+    if (researchQueue.length === 0) {
       const message = 'No topics met the minimum scoring threshold of 60/100'
       logPipelineEvent('quality-gate', 'failed', 'Topic scoring', message, 35)
       markPipelineDegraded(message)
@@ -3318,7 +3524,7 @@ export async function runPipeline(input: GenerateStoryInput) {
       }
     }
 
-    for (const score of shortlisted) {
+    for (const score of researchQueue) {
       selectedTopic = score.topic
 
       const research = await researchTopicInternal(score.topic)
