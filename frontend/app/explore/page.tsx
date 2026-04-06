@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { SearchBar, FilterPanel } from '@/components/search-bar'
 import { ArticleCard } from '@/components/article-card'
 import { CategoryFilter } from '@/components/category-filter'
+import { Spinner } from '@/components/ui/spinner'
 
 type ApiArticle = {
   id: string
@@ -23,6 +24,7 @@ export default function ExplorePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategories, setSelectedCategories] = useState<string[]>([])
   const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [filters, setFilters] = useState<Record<string, string[]>>({})
   const [sortBy, setSortBy] = useState('recent')
   const [apiArticles, setApiArticles] = useState<ApiArticle[]>([])
@@ -33,13 +35,29 @@ export default function ExplorePage() {
     const loadArticles = async () => {
       try {
         const response = await fetch('/api/articles', { cache: 'no-store' })
-        if (!response.ok) return
+        if (!mounted) {
+          return
+        }
+
+        if (!response.ok) {
+          setApiArticles([])
+          return
+        }
+
         const json = (await response.json()) as { articles?: ApiArticle[] }
-        if (mounted && Array.isArray(json.articles)) {
+        if (Array.isArray(json.articles)) {
           setApiArticles(json.articles)
+        } else {
+          setApiArticles([])
         }
       } catch {
-        setApiArticles([])
+        if (mounted) {
+          setApiArticles([])
+        }
+      } finally {
+        if (mounted) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -217,7 +235,15 @@ export default function ExplorePage() {
             </div>
 
             {/* Articles Grid */}
-            {filteredArticles.length > 0 ? (
+            {isLoading ? (
+              <div className="bg-card rounded-lg border border-border p-12 text-center">
+                <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-full border border-border p-3">
+                  <Spinner className="size-5 text-primary" />
+                </div>
+                <h3 className="text-lg font-semibold text-foreground mb-2">Loading stories...</h3>
+                <p className="text-muted-foreground">Fetching latest stories and categories.</p>
+              </div>
+            ) : filteredArticles.length > 0 ? (
               <div className="grid gap-6">
                 {filteredArticles.map((article) => (
                   <ArticleCard key={article.id} {...article} />

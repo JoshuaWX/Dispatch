@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { PipelineFeed } from '@/components/pipeline-feed'
 import { AnalyticsStats, PerformanceCharts } from '@/components/pipeline-analytics'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { RefreshCw, Download } from 'lucide-react'
 
 type PipelineApiEvent = {
@@ -46,6 +47,7 @@ function mapStage(stage: PipelineApiEvent['stage']) {
 
 export default function PipelinePage() {
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [stories, setStories] = useState<Array<{
     id: string
     title: string
@@ -271,13 +273,20 @@ export default function PipelinePage() {
   }, [pipelineState])
 
   useEffect(() => {
-    void loadArticles()
-  }, [])
+    let mounted = true
 
-  useEffect(() => {
-    void loadPipeline()
-    void loadArticles()
-    void loadVirloSnapshot()
+    const loadInitial = async () => {
+      await Promise.all([loadPipeline(), loadArticles(), loadVirloSnapshot()])
+      if (mounted) {
+        setIsLoading(false)
+      }
+    }
+
+    void loadInitial()
+
+    return () => {
+      mounted = false
+    }
   }, [])
 
   const handleRefresh = async () => {
@@ -412,7 +421,15 @@ export default function PipelinePage() {
 
         {/* Pipeline Feed */}
         <div className="mb-12">
-          {stories.length > 0 ? (
+          {isLoading ? (
+            <div className="bg-card rounded-lg border border-border p-8 text-center">
+              <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-full border border-border p-3">
+                <Spinner className="size-5 text-primary" />
+              </div>
+              <h3 className="text-xl font-semibold text-foreground mb-2">Loading pipeline feed...</h3>
+              <p className="text-muted-foreground">Pulling latest pipeline events and health signals.</p>
+            </div>
+          ) : stories.length > 0 ? (
             <PipelineFeed stories={stories} />
           ) : (
             <div className="bg-card rounded-lg border border-border p-8 text-center">
@@ -429,7 +446,14 @@ export default function PipelinePage() {
           <h2 className="text-2xl font-bold text-foreground mb-6">
             Performance Analytics
           </h2>
-          {verificationData.length > 0 || storyMetricsData.some((item) => item.published || item.pending) || categoryData.length > 0 ? (
+          {isLoading ? (
+            <div className="bg-card rounded-lg border border-border p-8 text-center">
+              <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-full border border-border p-3">
+                <Spinner className="size-5 text-primary" />
+              </div>
+              <p className="text-muted-foreground">Loading analytics...</p>
+            </div>
+          ) : verificationData.length > 0 || storyMetricsData.some((item) => item.published || item.pending) || categoryData.length > 0 ? (
             <PerformanceCharts
               verificationData={verificationData}
               storyMetricsData={storyMetricsData}
