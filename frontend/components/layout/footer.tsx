@@ -16,7 +16,7 @@ export function Footer() {
                   href="/"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  Front Page
+                  Home
                 </Link>
               </li>
               <li>
@@ -43,28 +43,12 @@ export function Footer() {
             <h4 className="text-sm font-semibold text-foreground mb-4">Company</h4>
             <ul className="space-y-2">
               <li>
-                <a
-                  href="#"
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  About
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#"
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Blog
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#"
+                <Link
+                  href="/careers"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Careers
-                </a>
+                </Link>
               </li>
             </ul>
           </div>
@@ -74,20 +58,28 @@ export function Footer() {
             <h4 className="text-sm font-semibold text-foreground mb-4">Legal</h4>
             <ul className="space-y-2">
               <li>
-                <a
-                  href="#"
+                <Link
+                  href="/legal"
+                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Legal
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/privacy"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Privacy
-                </a>
+                </Link>
               </li>
               <li>
-                <a
-                  href="#"
+                <Link
+                  href="/terms"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   Terms
-                </a>
+                </Link>
               </li>
             </ul>
           </div>
@@ -98,18 +90,12 @@ export function Footer() {
             <ul className="space-y-2">
               <li>
                 <a
-                  href="#"
+                  href="https://x.com/auranetHQ"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  Twitter
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#"
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  GitHub
+                  X (Twitter)
                 </a>
               </li>
             </ul>

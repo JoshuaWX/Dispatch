@@ -69,6 +69,7 @@ type ApiArticle = {
   readingTime: number
   publishedAt: string
   verificationStatus: 'verified' | 'pending' | 'unverified'
+  viewCount?: number
   qualityScore?: {
     sourceDiversity: number
     sensationalism: number
@@ -667,6 +668,27 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
           qualityScore: json.qualityScore,
           tags: json.tags,
         })
+
+        if (typeof window !== 'undefined') {
+          try {
+            const viewSessionKey = `dispatch:viewed:${json.id}`
+            const alreadyViewed = window.sessionStorage.getItem(viewSessionKey) === '1'
+
+            if (!alreadyViewed) {
+              window.sessionStorage.setItem(viewSessionKey, '1')
+
+              const viewResponse = await fetch(`/api/articles/${articleId}`, {
+                method: 'POST',
+              })
+
+              if (!viewResponse.ok) {
+                window.sessionStorage.removeItem(viewSessionKey)
+              }
+            }
+          } catch {
+            // Swallow view-tracking errors so article rendering is not impacted.
+          }
+        }
 
         const relatedResponse = await fetch('/api/articles', { cache: 'no-store' })
         if (relatedResponse.ok) {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getPublishedArticles } from '@/lib/pipeline'
+import { getArticleViewCount } from '@/lib/store'
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
@@ -20,6 +21,9 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     count: articles.length,
-    articles,
+    articles: articles.map((article) => ({
+      ...article,
+      viewCount: getArticleViewCount(article.id),
+    })),
   })
 }

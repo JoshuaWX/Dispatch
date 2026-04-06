@@ -117,7 +117,7 @@ export function Header() {
               href="/"
               className={navLinkClass('/')}
             >
-              Front Page
+              Home
             </Link>
             <Link
               href="/explore"
@@ -192,7 +192,7 @@ export function Header() {
                 pathname === '/' ? 'bg-muted text-foreground' : 'text-foreground hover:bg-muted'
               }`}
             >
-              Front Page
+              Home
             </Link>
             <Link
               href="/explore"

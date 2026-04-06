@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { ArticleCard } from '@/components/article-card'
 import { NewsTicker } from '@/components/news-ticker'
@@ -18,19 +19,12 @@ type ApiArticle = {
   sources: Array<{ name: string }>
   readingTime: number
   publishedAt: string
+  viewCount?: number
   qualityScore: { overallScore: number }
-}
-
-type VirloSnapshot = {
-  dayKey: string
-  source: 'api' | 'cache' | 'none'
-  topTopics: string[]
-  success: boolean
 }
 
 export function HomePage() {
   const [articles, setArticles] = useState<ApiArticle[]>([])
-  const [virloSnapshot, setVirloSnapshot] = useState<VirloSnapshot | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -48,42 +42,7 @@ export function HomePage() {
       }
     }
 
-    const loadVirloSnapshot = async () => {
-      try {
-        const response = await fetch('/api/trends', { cache: 'no-store' })
-        if (!response.ok) return
-
-        const json = (await response.json()) as {
-          virloSnapshot?: {
-            dayKey?: string
-            source?: 'api' | 'cache' | 'none'
-            topTopics?: string[]
-            success?: boolean
-          }
-        }
-
-        const snapshot = json.virloSnapshot
-        if (!mounted || !snapshot || typeof snapshot.dayKey !== 'string') {
-          return
-        }
-
-        setVirloSnapshot({
-          dayKey: snapshot.dayKey,
-          source: snapshot.source ?? 'none',
-          topTopics: Array.isArray(snapshot.topTopics)
-            ? snapshot.topTopics.filter((topic): topic is string => typeof topic === 'string').slice(0, 3)
-            : [],
-          success: snapshot.success ?? false,
-        })
-      } catch {
-        if (mounted) {
-          setVirloSnapshot(null)
-        }
-      }
-    }
-
     void loadArticles()
-    void loadVirloSnapshot()
     return () => {
       mounted = false
     }
@@ -99,7 +58,7 @@ export function HomePage() {
         categoryColor: 'default' as const,
         imageUrl: article.imageUrl,
         publishedAt: new Date(article.publishedAt).toLocaleString(),
-        viewCount: Math.round(article.qualityScore.overallScore * 5000),
+        viewCount: article.viewCount ?? 0,
         sources: article.sources.map((source) => source.name),
         featured: index === 0,
       })),
@@ -123,18 +82,15 @@ export function HomePage() {
 
   const liveSummary = useMemo(() => {
     const sourceCount = mapped[0]?.sources.length ?? 0
-    const averageScore =
+    const averageViews =
       mapped.length > 0
-        ? Math.round(
-            (mapped.reduce((sum, article) => sum + article.viewCount / 5000, 0) / mapped.length) *
-              10
-          ) / 10
+        ? Math.round(mapped.reduce((sum, article) => sum + (article.viewCount ?? 0), 0) / mapped.length)
         : 0
     const topCategory = categorySummary[0]?.name ?? 'n/a'
 
     return {
       sourceCount,
-      averageScore,
+      averageViews,
       topCategory,
     }
   }, [categorySummary, mapped])
@@ -187,41 +143,9 @@ export function HomePage() {
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-primary mt-1">•</span>
-                      <span>Average live story score: {liveSummary.averageScore || 'n/a'}/10</span>
+                      <span>Average live story views: {liveSummary.averageViews.toLocaleString()}</span>
                     </li>
                   </ul>
-                </div>
-                <div className="bg-card rounded-lg border border-border p-6">
-                  <h3 className="text-sm font-semibold text-foreground mb-3">Virlo Snapshot</h3>
-                  {virloSnapshot ? (
-                    <div className="space-y-2 text-sm text-muted-foreground">
-                      <p>
-                        <span className="font-medium text-foreground">Day key:</span> {virloSnapshot.dayKey}
-                      </p>
-                      <p>
-                        <span className="font-medium text-foreground">Source:</span>{' '}
-                        {virloSnapshot.source === 'api'
-                          ? 'Live API call'
-                          : virloSnapshot.source === 'cache'
-                            ? 'Daily cache'
-                            : 'Unavailable'}
-                      </p>
-                      <div>
-                        <p className="font-medium text-foreground mb-1">Top 3 topics</p>
-                        {virloSnapshot.topTopics.length > 0 ? (
-                          <ul className="space-y-1">
-                            {virloSnapshot.topTopics.map((topic) => (
-                              <li key={topic} className="line-clamp-1">• {topic}</li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p>Virlo topics are not available yet.</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Virlo snapshot is loading.</p>
-                  )}
                 </div>
               </div>
             </div>
@@ -260,15 +184,16 @@ export function HomePage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
             {categorySummary.length > 0 ? (
               categorySummary.map((cat) => (
-                <div
+                <Link
                   key={cat.name}
-                  className="group cursor-pointer p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/5 transition-all text-center"
+                  href={`/explore?category=${encodeURIComponent(cat.name.toLowerCase().replace(/\s+/g, '-'))}`}
+                  className="group block p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/5 transition-all text-center no-underline"
                 >
                   <p className="font-semibold text-sm text-foreground group-hover:text-primary transition-colors">
                     {cat.name}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">{cat.count} stories</p>
-                </div>
+                </Link>
               ))
             ) : (
               <p className="col-span-full text-sm text-muted-foreground">
@@ -307,16 +232,16 @@ export function HomePage() {
             </div>
           </section>
 
-          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Get News You Can Trust</h2>
+          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Stay Ahead Of The Story</h2>
           <p className="text-lg text-muted-foreground mb-8">
-            Sign up for personalized news briefings curated by AI with full source transparency.
+            Follow the live desk and explore verified reporting with full source transparency.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button className="px-8 py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition-colors">
-              Subscribe Now
+              Explore Stories
             </button>
             <button className="px-8 py-3 border border-primary text-primary rounded-lg font-semibold hover:bg-primary/10 transition-colors">
-              Learn More
+              See Pipeline
             </button>
           </div>
         </div>

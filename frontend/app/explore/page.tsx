@@ -15,6 +15,7 @@ type ApiArticle = {
   category: string
   sources: Array<{ name: string }>
   publishedAt: string
+  viewCount?: number
   qualityScore: { overallScore: number }
 }
 
@@ -48,6 +49,21 @@ export default function ExplorePage() {
     }
   }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const category = new URLSearchParams(window.location.search).get('category')
+    if (!category) {
+      return
+    }
+
+    setSelectedCategories((previous) =>
+      previous.length === 1 && previous[0] === category ? previous : [category]
+    )
+  }, [])
+
   const handleCategoryChange = (categoryId: string) => {
     setSelectedCategories((prev) =>
       prev.includes(categoryId)
@@ -58,7 +74,7 @@ export default function ExplorePage() {
 
   const displayArticles = useMemo(
     () =>
-      apiArticles.map((article, index) => ({
+      apiArticles.map((article) => ({
         id: article.id,
         title: article.headline,
         description: article.subheadline || article.lede,
@@ -66,7 +82,7 @@ export default function ExplorePage() {
         categoryColor: 'default' as const,
         imageUrl: article.imageUrl,
         publishedAt: article.publishedAt,
-        viewCount: Math.round(article.qualityScore.overallScore * 5000),
+        viewCount: article.viewCount ?? 0,
         sources: article.sources.map((source) => source.name),
       })),
     [apiArticles]

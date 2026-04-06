@@ -6,6 +6,7 @@ import type { PipelineEvent, PipelineSnapshot, PublishedArticle } from '@/lib/di
 
 type DispatchStore = {
   articles: PublishedArticle[]
+  views: Record<string, number>
   events: PipelineEvent[]
   pipeline: PipelineSnapshot
 }
@@ -39,6 +40,7 @@ type ArticleRow = {
 
 const PERSISTENCE_DIR = path.join(process.cwd(), '.dispatch-data')
 const PERSISTENCE_FILE = path.join(PERSISTENCE_DIR, 'articles.json')
+const VIEWS_PERSISTENCE_FILE = path.join(PERSISTENCE_DIR, 'views.json')
 const SUPABASE_ARTICLES_TABLE = 'dispatch_articles'
 
 const globalForSupabase = globalThis as typeof globalThis & {
@@ -184,6 +186,32 @@ function loadPersistedArticles(): PublishedArticle[] {
   }
 }
 
+function loadPersistedViews() {
+  try {
+    const raw = readFileSync(VIEWS_PERSISTENCE_FILE, 'utf8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+
+    if (!parsed || typeof parsed !== 'object') {
+      return {} as Record<string, number>
+    }
+
+    const next: Record<string, number> = {}
+    for (const [articleId, value] of Object.entries(parsed)) {
+      if (typeof articleId !== 'string') {
+        continue
+      }
+
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        next[articleId] = Math.floor(value)
+      }
+    }
+
+    return next
+  } catch {
+    return {} as Record<string, number>
+  }
+}
+
 function persistArticles(articles: PublishedArticle[]) {
   // Skip disk persistence in serverless environments (Vercel, etc.)
   if (process.env.VERCEL || !process.env.SUPABASE_URL) {
@@ -195,6 +223,20 @@ function persistArticles(articles: PublishedArticle[]) {
     writeFileSync(PERSISTENCE_FILE, JSON.stringify(articles, null, 2), 'utf8')
   } catch (error) {
     console.warn('Unable to persist articles to disk:', error)
+  }
+}
+
+function persistViews(views: Record<string, number>) {
+  // Skip disk persistence in serverless environments (Vercel, etc.)
+  if (process.env.VERCEL || !process.env.SUPABASE_URL) {
+    return
+  }
+
+  try {
+    mkdirSync(PERSISTENCE_DIR, { recursive: true })
+    writeFileSync(VIEWS_PERSISTENCE_FILE, JSON.stringify(views, null, 2), 'utf8')
+  } catch (error) {
+    console.warn('Unable to persist article views to disk:', error)
   }
 }
 
@@ -214,8 +256,17 @@ function articlesToPipelineEvents(articles: PublishedArticle[]): PipelineEvent[]
 
 const createInitialState = (): DispatchStore => {
   const articles = loadPersistedArticles()
+  const views = loadPersistedViews()
+
+  for (const article of articles) {
+    if (!(article.id in views)) {
+      views[article.id] = 0
+    }
+  }
+
   return {
     articles,
+    views,
     events: articlesToPipelineEvents(articles),
     pipeline: {
       status: 'idle',
@@ -266,7 +317,9 @@ export function upsertArticle(article: PublishedArticle) {
   const index = store.articles.findIndex((existing) => existing.id === article.id)
   if (index >= 0) {
     store.articles[index] = article
+    store.views[article.id] = store.views[article.id] ?? 0
     persistArticles(store.articles)
+    persistViews(store.views)
     store.events = articlesToPipelineEvents(store.articles)
     return article
   }
@@ -293,15 +346,35 @@ export function upsertArticle(article: PublishedArticle) {
       id: existing.id,
     }
     store.articles[duplicateIndex] = merged
+    store.views[merged.id] = store.views[merged.id] ?? 0
     persistArticles(store.articles)
+    persistViews(store.views)
     store.events = articlesToPipelineEvents(store.articles)
     return merged
   }
 
   store.articles.unshift(article)
+  store.views[article.id] = store.views[article.id] ?? 0
   persistArticles(store.articles)
+  persistViews(store.views)
   store.events = articlesToPipelineEvents(store.articles)
   return article
+}
+
+export function getArticleViewCount(articleId: string) {
+  const value = store.views[articleId]
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return 0
+  }
+
+  return Math.floor(value)
+}
+
+export function incrementArticleViewCount(articleId: string) {
+  const next = getArticleViewCount(articleId) + 1
+  store.views[articleId] = next
+  persistViews(store.views)
+  return next
 }
 
 export function listRecentEvents() {
