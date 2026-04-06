@@ -63,7 +63,7 @@ export function ArticleCard({
               {category}
             </Badge>
             {featured && (
-              <Badge variant="secondary" className="text-[11px] uppercase tracking-[0.12em]">
+              <Badge variant="default" className="text-[11px] uppercase tracking-[0.12em]">
                 Featured
               </Badge>
             )}

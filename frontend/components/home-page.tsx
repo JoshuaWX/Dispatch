@@ -53,7 +53,7 @@ export function HomePage() {
         title: article.headline,
         description: article.subheadline || article.lede,
         category: article.category,
-        categoryColor: (index === 0 ? 'secondary' : 'default') as const,
+        categoryColor: 'default' as const,
         imageUrl: article.imageUrl,
         publishedAt: new Date(article.publishedAt).toLocaleString(),
         viewCount: Math.round(article.qualityScore.overallScore * 5000),

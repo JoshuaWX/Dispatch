@@ -2103,13 +2103,22 @@ function getGroqApiKeys() {
   const primaryKey = (process.env.GROQ_API_KEY ?? '').trim()
   const fallbackKey = (process.env.GROQ_API_KEY_FALLBACK ?? '').trim()
   const fallbackKeyTwo = (process.env.GROQ_API_KEY_FALLBACK_2 ?? '').trim()
+  const fallbackKeyThree = (process.env.GROQ_API_KEY_FALLBACK_3 ?? '').trim()
+  const fallbackKeyFour = (process.env.GROQ_API_KEY_FALLBACK_4 ?? '').trim()
 
   const keysFromList = (process.env.GROQ_API_KEYS ?? '')
     .split(/[\n,]/g)
     .map((value) => value.trim())
     .filter(Boolean)
 
-  const candidates = [primaryKey, fallbackKey, fallbackKeyTwo, ...keysFromList]
+  const candidates = [
+    primaryKey,
+    fallbackKey,
+    fallbackKeyTwo,
+    fallbackKeyThree,
+    fallbackKeyFour,
+    ...keysFromList,
+  ]
     .map((value) => value.trim())
     .filter(Boolean)
 

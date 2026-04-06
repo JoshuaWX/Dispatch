@@ -63,7 +63,7 @@ export default function ExplorePage() {
         title: article.headline,
         description: article.subheadline || article.lede,
         category: article.category,
-        categoryColor: (index % 3 === 0 ? 'secondary' : 'default') as const,
+        categoryColor: 'default' as const,
         imageUrl: article.imageUrl,
         publishedAt: article.publishedAt,
         viewCount: Math.round(article.qualityScore.overallScore * 5000),
