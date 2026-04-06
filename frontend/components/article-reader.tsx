@@ -172,6 +172,35 @@ function toTitleCase(value: string) {
     .join(' ')
 }
 
+function formatRelativeTime(value: string) {
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) {
+    return 'recently'
+  }
+
+  const diffMs = Date.now() - timestamp
+  const minute = 60 * 1000
+  const hour = 60 * minute
+  const day = 24 * hour
+
+  if (diffMs < minute) {
+    return 'just now'
+  }
+
+  if (diffMs < hour) {
+    const minutes = Math.max(1, Math.floor(diffMs / minute))
+    return `${minutes}m ago`
+  }
+
+  if (diffMs < day) {
+    const hours = Math.max(1, Math.floor(diffMs / hour))
+    return `${hours}h ago`
+  }
+
+  const days = Math.max(1, Math.floor(diffMs / day))
+  return `${days}d ago`
+}
+
 function CategoryPill({ category }: { category: string }) {
   return (
     <span className="inline-flex items-center px-2.5 py-1 rounded-sm bg-primary text-primary-foreground text-[11px] tracking-[0.14em] uppercase font-semibold">
@@ -593,10 +622,12 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
   const MIN_IMAGE_CONFIDENCE = 7
   const evidenceSources = article?.sources.slice(0, 3) ?? []
   const overallScore = article?.qualityScore?.overallScore ?? null
-  const showTrustedImage =
-    Boolean(article?.imageUrl) &&
-    article?.verificationStatus === 'verified' &&
-    (overallScore === null || overallScore >= MIN_IMAGE_CONFIDENCE)
+  const showTrustedImage = Boolean(article?.imageUrl) &&
+    (
+      article?.verificationStatus !== 'verified' ||
+      overallScore === null ||
+      overallScore >= MIN_IMAGE_CONFIDENCE
+    )
 
   useEffect(() => {
     let mounted = true
@@ -629,7 +660,7 @@ export function ArticleReader({ articleId }: ArticleReaderProps) {
           readTime: json.readingTime,
           verificationStatus: json.verificationStatus,
           sourceCount: json.sources.length,
-          lastUpdated: 'just now',
+          lastUpdated: formatRelativeTime(json.publishedAt),
           aiGenerated: true,
           content: json.body,
           sources: json.sources,

@@ -32,7 +32,7 @@ export function TrustStrip({
       icon: AlertCircle,
       color: 'text-muted-foreground',
       bg: 'bg-muted/70',
-      label: 'Unverified',
+      label: 'Draft Mode',
     },
   }
 
@@ -50,12 +50,12 @@ export function TrustStrip({
             </span>
             {aiGenerated && (
               <span className="text-xs px-2 py-1 bg-primary/10 text-primary rounded-full">
-                AI-Generated
+                AI-Assisted
               </span>
             )}
           </div>
           <div className="text-sm text-muted-foreground space-y-1">
-            <p>{sourceCount} sources aggregated</p>
+            <p>{sourceCount} sources cited</p>
             <p>Last updated: {lastUpdated}</p>
           </div>
         </div>

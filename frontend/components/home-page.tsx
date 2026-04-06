@@ -21,8 +21,6 @@ type ApiArticle = {
   qualityScore: { overallScore: number }
 }
 
-const MIN_IMAGE_CONFIDENCE = 7
-
 export function HomePage() {
   const [articles, setArticles] = useState<ApiArticle[]>([])
 
@@ -56,8 +54,7 @@ export function HomePage() {
         description: article.subheadline || article.lede,
         category: article.category,
         categoryColor: (index === 0 ? 'secondary' : 'default') as const,
-        imageUrl:
-          article.qualityScore.overallScore >= MIN_IMAGE_CONFIDENCE ? article.imageUrl : undefined,
+        imageUrl: article.imageUrl,
         publishedAt: new Date(article.publishedAt).toLocaleString(),
         viewCount: Math.round(article.qualityScore.overallScore * 5000),
         sources: article.sources.map((source) => source.name),

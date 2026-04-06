@@ -64,17 +64,127 @@ async function fetchWikipediaImage(topic: string) {
   }
 }
 
+function resolveImageUrl(candidate: string, pageUrl: string) {
+  const trimmed = candidate.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    const resolved = new URL(trimmed, pageUrl)
+    if (!/^https?:$/.test(resolved.protocol)) {
+      return null
+    }
+
+    return resolved.toString()
+  } catch {
+    return null
+  }
+}
+
+function extractMetaImageFromHtml(html: string, pageUrl: string) {
+  const patterns = [
+    /<meta[^>]+property=["']og:image(?:secure_url)?["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image(?:secure_url)?["'][^>]*>/i,
+    /<meta[^>]+name=["']twitter:image(?::src)?["'][^>]+content=["']([^"']+)["'][^>]*>/i,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image(?::src)?["'][^>]*>/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern)
+    const candidate = match?.[1]
+    if (!candidate) {
+      continue
+    }
+
+    const resolved = resolveImageUrl(candidate, pageUrl)
+    if (resolved) {
+      return resolved
+    }
+  }
+
+  return null
+}
+
+async function fetchSourceImage(sourceUrl: string) {
+  const url = sourceUrl.trim()
+  if (!url) {
+    return null
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 2500)
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        // Use a common browser UA to reduce bot blocking on metadata endpoints.
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml',
+      },
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.toLowerCase().includes('text/html')) {
+      return null
+    }
+
+    const html = await response.text()
+    const imageUrl = extractMetaImageFromHtml(html, response.url || url)
+    if (!imageUrl) {
+      return null
+    }
+
+    return {
+      imageUrl,
+      imageCredit: 'Research source image',
+    }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function fetchImageFromResearchSources(sourceUrls: string[]) {
+  const uniqueUrls = Array.from(
+    new Set(sourceUrls.map((value) => value.trim()).filter(Boolean))
+  ).slice(0, 4)
+
+  for (const url of uniqueUrls) {
+    const image = await fetchSourceImage(url)
+    if (image) {
+      return image
+    }
+  }
+
+  return null
+}
+
 export async function resolveStoryImage(
   topic: string,
   category: ArticleCategory,
-  hintedImageUrl?: string | null
+  hintedImageUrl?: string | null,
+  sourceUrls: string[] = []
 ) {
   const hint = hintedImageUrl?.trim()
   if (hint) {
     return {
       imageUrl: hint,
-      imageCredit: 'NewsData source image',
+      imageCredit: 'Source image',
     }
+  }
+
+  const researchSourceImage = await fetchImageFromResearchSources(sourceUrls)
+  if (researchSourceImage) {
+    return researchSourceImage
   }
 
   const wikiImage = await fetchWikipediaImage(topic)
@@ -82,5 +192,9 @@ export async function resolveStoryImage(
     return wikiImage
   }
 
-  return null
+  const fallback = categoryFallback[category]
+  return {
+    imageUrl: fallback.url,
+    imageCredit: fallback.credit,
+  }
 }

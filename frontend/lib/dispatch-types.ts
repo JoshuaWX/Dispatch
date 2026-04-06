@@ -135,6 +135,7 @@ export interface PipelineSnapshot {
 
 export interface GenerateStoryInput {
   topic?: string
+  strict?: boolean
 }
 
 export interface QaRequestBody {

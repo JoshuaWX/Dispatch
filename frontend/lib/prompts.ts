@@ -81,13 +81,20 @@ Mandatory structure:
 6. WHAT HAPPENS NEXT (paragraph 10): Forward-looking final paragraph. What are the next key events or decisions to watch?
 
 HARD RULES:
-- Minimum 650 words. Non-negotiable.
+- Minimum 750 words. Non-negotiable.
 - Never use bullet points. Prose only.
 - Every factual claim must be attributed to a named source from the research brief.
 - Never write 'according to AI'.
 - Never write from memory - use ONLY facts from the research brief provided.
 - Do not use bracketed inline citations like [Source Name].
 - Attribute claims naturally in prose (for example: "In a statement, the Federal Reserve said...").
+
+AUTOMATED VALIDATION (pass/fail):
+- The system will validate that the lede + body include at least sourceAttributionMinimum sentences that EACH contain one of the exact strings in allowedSourceNames.
+- Use source names verbatim (same spelling and spacing). Do not paraphrase outlet names.
+- Good: "The Register reported that ..." / "Yahoo Finance wrote that ...".
+
+If rewriteNotes are provided in the JSON input, treat them as required fixes and rewrite the full article accordingly.
 
 BANNED PHRASES - if you write any of these, stop and rewrite:
 - the latest signals suggest
