@@ -21,8 +21,16 @@ type ApiArticle = {
   qualityScore: { overallScore: number }
 }
 
+type VirloSnapshot = {
+  dayKey: string
+  source: 'api' | 'cache' | 'none'
+  topTopics: string[]
+  success: boolean
+}
+
 export function HomePage() {
   const [articles, setArticles] = useState<ApiArticle[]>([])
+  const [virloSnapshot, setVirloSnapshot] = useState<VirloSnapshot | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -40,7 +48,42 @@ export function HomePage() {
       }
     }
 
+    const loadVirloSnapshot = async () => {
+      try {
+        const response = await fetch('/api/trends', { cache: 'no-store' })
+        if (!response.ok) return
+
+        const json = (await response.json()) as {
+          virloSnapshot?: {
+            dayKey?: string
+            source?: 'api' | 'cache' | 'none'
+            topTopics?: string[]
+            success?: boolean
+          }
+        }
+
+        const snapshot = json.virloSnapshot
+        if (!mounted || !snapshot || typeof snapshot.dayKey !== 'string') {
+          return
+        }
+
+        setVirloSnapshot({
+          dayKey: snapshot.dayKey,
+          source: snapshot.source ?? 'none',
+          topTopics: Array.isArray(snapshot.topTopics)
+            ? snapshot.topTopics.filter((topic): topic is string => typeof topic === 'string').slice(0, 3)
+            : [],
+          success: snapshot.success ?? false,
+        })
+      } catch {
+        if (mounted) {
+          setVirloSnapshot(null)
+        }
+      }
+    }
+
     void loadArticles()
+    void loadVirloSnapshot()
     return () => {
       mounted = false
     }
@@ -147,6 +190,38 @@ export function HomePage() {
                       <span>Average live story score: {liveSummary.averageScore || 'n/a'}/10</span>
                     </li>
                   </ul>
+                </div>
+                <div className="bg-card rounded-lg border border-border p-6">
+                  <h3 className="text-sm font-semibold text-foreground mb-3">Virlo Snapshot</h3>
+                  {virloSnapshot ? (
+                    <div className="space-y-2 text-sm text-muted-foreground">
+                      <p>
+                        <span className="font-medium text-foreground">Day key:</span> {virloSnapshot.dayKey}
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">Source:</span>{' '}
+                        {virloSnapshot.source === 'api'
+                          ? 'Live API call'
+                          : virloSnapshot.source === 'cache'
+                            ? 'Daily cache'
+                            : 'Unavailable'}
+                      </p>
+                      <div>
+                        <p className="font-medium text-foreground mb-1">Top 3 topics</p>
+                        {virloSnapshot.topTopics.length > 0 ? (
+                          <ul className="space-y-1">
+                            {virloSnapshot.topTopics.map((topic) => (
+                              <li key={topic} className="line-clamp-1">• {topic}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p>Virlo topics are not available yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Virlo snapshot is loading.</p>
+                  )}
                 </div>
               </div>
             </div>

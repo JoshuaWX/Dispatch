@@ -30,6 +30,13 @@ type ApiArticle = {
   qualityScore: { overallScore: number }
 }
 
+type VirloSnapshot = {
+  dayKey: string
+  source: 'api' | 'cache' | 'none'
+  topTopics: string[]
+  success: boolean
+}
+
 function mapStage(stage: PipelineApiEvent['stage']) {
   if (stage === 'trend-intake') return 'discovery' as const
   if (stage === 'quality-gate') return 'verification' as const
@@ -50,6 +57,7 @@ export default function PipelinePage() {
   }>>([])
   const [pipelineState, setPipelineState] = useState<PipelineStatusResponse | null>(null)
   const [articles, setArticles] = useState<ApiArticle[]>([])
+  const [virloSnapshot, setVirloSnapshot] = useState<VirloSnapshot | null>(null)
 
   const loadArticles = async () => {
     try {
@@ -87,6 +95,39 @@ export default function PipelinePage() {
     } catch {
       setPipelineState(null)
       setStories([])
+    }
+  }
+
+  const loadVirloSnapshot = async () => {
+    try {
+      const response = await fetch('/api/trends', { cache: 'no-store' })
+      if (!response.ok) return
+
+      const json = (await response.json()) as {
+        virloSnapshot?: {
+          dayKey?: string
+          source?: 'api' | 'cache' | 'none'
+          topTopics?: string[]
+          success?: boolean
+        }
+      }
+
+      const snapshot = json.virloSnapshot
+      if (!snapshot || typeof snapshot.dayKey !== 'string') {
+        setVirloSnapshot(null)
+        return
+      }
+
+      setVirloSnapshot({
+        dayKey: snapshot.dayKey,
+        source: snapshot.source ?? 'none',
+        topTopics: Array.isArray(snapshot.topTopics)
+          ? snapshot.topTopics.filter((topic): topic is string => typeof topic === 'string').slice(0, 3)
+          : [],
+        success: snapshot.success ?? false,
+      })
+    } catch {
+      setVirloSnapshot(null)
     }
   }
 
@@ -236,13 +277,23 @@ export default function PipelinePage() {
   useEffect(() => {
     void loadPipeline()
     void loadArticles()
+    void loadVirloSnapshot()
   }, [])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
-    await loadPipeline()
+    await Promise.all([loadPipeline(), loadVirloSnapshot()])
     setIsRefreshing(false)
   }
+
+  const virloSourceLabel =
+    virloSnapshot?.source === 'api'
+      ? 'Live API'
+      : virloSnapshot?.source === 'cache'
+        ? 'Daily Cache'
+        : 'Unavailable'
+
+  const virloStatusDot = virloSnapshot?.success ? 'bg-emerald-500' : 'bg-amber-500'
 
   return (
     <main className="min-h-screen bg-background">
@@ -296,6 +347,41 @@ export default function PipelinePage() {
               </div>
             </div>
           )}
+
+          <section className="mb-8 rounded-2xl border border-primary/25 bg-linear-to-br from-primary/12 via-card to-card p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.2em] text-primary font-semibold">
+                  Virlo Snapshot
+                </p>
+                <h2 className="mt-1 text-xl font-semibold text-foreground">Daily Trend Intelligence</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Day key {virloSnapshot?.dayKey ?? 'loading'} · Source {virloSourceLabel}
+                </p>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1.5 text-xs font-medium text-foreground">
+                <span className={`h-2 w-2 rounded-full ${virloStatusDot}`} />
+                {virloSnapshot?.success ? 'Snapshot Healthy' : 'Awaiting Signal'}
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {virloSnapshot?.topTopics.length ? (
+                virloSnapshot.topTopics.map((topic) => (
+                  <article
+                    key={topic}
+                    className="rounded-xl border border-border/70 bg-background/75 px-3 py-3 text-sm text-foreground line-clamp-3"
+                  >
+                    {topic}
+                  </article>
+                ))
+              ) : (
+                <div className="sm:col-span-3 rounded-xl border border-dashed border-border bg-background/60 px-3 py-3 text-sm text-muted-foreground">
+                  No snapshot topics available yet. Refresh after the next trend pull.
+                </div>
+              )}
+            </div>
+          </section>
 
           {/* Stats */}
           <AnalyticsStats
