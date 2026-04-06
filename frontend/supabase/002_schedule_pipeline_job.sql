@@ -21,10 +21,17 @@ where exists (
   where jobname = 'dispatch-hourly-generate'
 );
 
--- Run every hour.
+select cron.unschedule('dispatch-2hour-generate')
+where exists (
+  select 1
+  from cron.job
+  where jobname = 'dispatch-2hour-generate'
+);
+
+-- Run every 2 hours.
 select cron.schedule(
-  'dispatch-hourly-generate',
-  '0 * * * *',
+  'dispatch-2hour-generate',
+  '0 */2 * * *',
   $$
     select net.http_get(
       url := '<YOUR_VERCEL_APP_URL>/api/cron/generate',
