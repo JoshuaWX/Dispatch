@@ -105,11 +105,9 @@ export function Header() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-18">
-          <Link href="/" className="flex items-center gap-3 no-underline hover:no-underline">
-            <div className="bg-primary text-primary-foreground px-3 py-1.5 rounded-sm leading-none">
-              <span className="text-base sm:text-lg font-black tracking-[0.18em]">DISPATCH</span>
-            </div>
-            <span className="hidden lg:inline text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+          <Link href="/" className="flex items-center gap-3 no-underline hover:no-underline hover:opacity-80 transition-opacity">
+            <img src="/dispatch-logo.svg" alt="Dispatch" className="h-8 sm:h-10 w-auto" />
+            <span className="hidden lg:inline text-[11px] uppercase tracking-[0.2em] text-muted-foreground border-l border-border pl-3 ml-1">
               Independent World Report
             </span>
           </Link>
