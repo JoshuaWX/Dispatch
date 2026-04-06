@@ -1,5 +1,8 @@
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+
 const VIRLO_TRENDS_DIGEST_URL = 'https://api.virlo.ai/v1/trends/digest'
 const MAX_TOPICS = 60
+const SUPABASE_VIRLO_CACHE_TABLE = 'dispatch_virlo_daily_cache'
 
 type VirloDailyCache = {
   dayKey: string
@@ -22,10 +25,121 @@ export type VirloDailySnapshot = {
 
 const globalForVirlo = globalThis as typeof globalThis & {
   __dispatchVirloDailyCache?: VirloDailyCache
+  __dispatchVirloSupabaseClient?: SupabaseClient
+}
+
+type VirloDailyRow = {
+  day_key: string
+  topics: unknown
+  fetched_at: string
+  attempted_at: string
+  success: boolean
+  error: string | null
 }
 
 function getUtcDayKey(now = new Date()) {
   return now.toISOString().slice(0, 10)
+}
+
+function hasSupabaseConfig() {
+  return Boolean(
+    process.env.SUPABASE_URL?.trim() && process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+  )
+}
+
+function getSupabaseClient() {
+  if (!hasSupabaseConfig()) {
+    return null
+  }
+
+  if (!globalForVirlo.__dispatchVirloSupabaseClient) {
+    globalForVirlo.__dispatchVirloSupabaseClient = createClient(
+      process.env.SUPABASE_URL!.trim(),
+      process.env.SUPABASE_SERVICE_ROLE_KEY!.trim(),
+      {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }
+    )
+  }
+
+  return globalForVirlo.__dispatchVirloSupabaseClient
+}
+
+function toMillis(value: string) {
+  const millis = new Date(value).getTime()
+  return Number.isFinite(millis) ? millis : Date.now()
+}
+
+function normalizeTopics(value: unknown) {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => normalizeTopic(item))
+    .filter((item) => item.length >= 4)
+    .slice(0, MAX_TOPICS)
+}
+
+function rowToCache(row: VirloDailyRow): VirloDailyCache {
+  return {
+    dayKey: row.day_key,
+    topics: normalizeTopics(row.topics),
+    fetchedAt: toMillis(row.fetched_at),
+    attemptedAt: toMillis(row.attempted_at),
+    success: row.success,
+    error: row.error ?? undefined,
+  }
+}
+
+async function readDailyCachePersistent(dayKey: string): Promise<VirloDailyCache | null> {
+  const client = getSupabaseClient()
+  if (!client) {
+    return null
+  }
+
+  try {
+    const { data, error } = await client
+      .from(SUPABASE_VIRLO_CACHE_TABLE)
+      .select('*')
+      .eq('day_key', dayKey)
+      .maybeSingle()
+
+    if (error || !data) {
+      return null
+    }
+
+    return rowToCache(data as VirloDailyRow)
+  } catch {
+    return null
+  }
+}
+
+async function upsertDailyCachePersistent(cache: VirloDailyCache) {
+  const client = getSupabaseClient()
+  if (!client) {
+    return
+  }
+
+  try {
+    await client.from(SUPABASE_VIRLO_CACHE_TABLE).upsert(
+      {
+        day_key: cache.dayKey,
+        topics: cache.topics,
+        fetched_at: new Date(cache.fetchedAt).toISOString(),
+        attempted_at: new Date(cache.attemptedAt).toISOString(),
+        success: cache.success,
+        error: cache.error ?? null,
+      },
+      { onConflict: 'day_key' }
+    )
+  } catch {
+    // Ignore persistence failures and continue with in-memory cache.
+  }
 }
 
 function normalizeTopic(value: string) {
@@ -149,6 +263,21 @@ export async function getDailyVirloSnapshot(): Promise<VirloDailySnapshot> {
     }
   }
 
+  const persistedCache = await readDailyCachePersistent(dayKey)
+  if (persistedCache) {
+    globalForVirlo.__dispatchVirloDailyCache = persistedCache
+
+    return {
+      dayKey,
+      topics: persistedCache.topics,
+      fetchedAt: persistedCache.fetchedAt,
+      fromCache: true,
+      calledApi: false,
+      success: persistedCache.success,
+      error: persistedCache.error,
+    }
+  }
+
   const token = resolveVirloToken()
   if (!token) {
     const emptyCache: VirloDailyCache = {
@@ -161,6 +290,7 @@ export async function getDailyVirloSnapshot(): Promise<VirloDailySnapshot> {
     }
 
     globalForVirlo.__dispatchVirloDailyCache = emptyCache
+    await upsertDailyCachePersistent(emptyCache)
 
     return {
       dayKey,
@@ -184,6 +314,7 @@ export async function getDailyVirloSnapshot(): Promise<VirloDailySnapshot> {
   }
 
   globalForVirlo.__dispatchVirloDailyCache = nextCache
+  await upsertDailyCachePersistent(nextCache)
 
   return {
     dayKey,

@@ -1861,15 +1861,16 @@ async function callAnthropic(system: string, payload: object) {
 }
 
 function getGroqApiKeys() {
+  const primaryKey = (process.env.GROQ_API_KEY ?? '').trim()
+  const fallbackKey = (process.env.GROQ_API_KEY_FALLBACK ?? '').trim()
+  const fallbackKeyTwo = (process.env.GROQ_API_KEY_FALLBACK_2 ?? '').trim()
+
   const keysFromList = (process.env.GROQ_API_KEYS ?? '')
     .split(/[\n,]/g)
     .map((value) => value.trim())
     .filter(Boolean)
 
-  const primaryKey = (process.env.GROQ_API_KEY ?? '').trim()
-  const fallbackKey = (process.env.GROQ_API_KEY_FALLBACK ?? '').trim()
-
-  const candidates = [...keysFromList, primaryKey, fallbackKey]
+  const candidates = [primaryKey, fallbackKey, fallbackKeyTwo, ...keysFromList]
     .map((value) => value.trim())
     .filter(Boolean)
 

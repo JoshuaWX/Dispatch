@@ -5,7 +5,8 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { topic?: string }
   const requestUrl = new URL(request.url)
   const strictParam = requestUrl.searchParams.get('strict')
-  const strict = strictParam === 'false' ? false : true
+  // Production default follows the publish-first flow that passed end-to-end in testing.
+  const strict = strictParam === 'true'
 
   try {
     const result = await runPipeline({ topic: body.topic, strict })
