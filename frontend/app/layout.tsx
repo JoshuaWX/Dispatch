@@ -1,27 +1,27 @@
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono, Playfair_Display } from 'next/font/google'
-import { Analytics } from '@vercel/analytics/next'
-import { ThemeProvider } from '@/components/theme-provider'
+import { headers } from 'next/headers'
 import { Header } from '@/components/layout/header'
 import { Footer } from '@/components/layout/footer'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
-const _playfair = Playfair_Display({
-  subsets: ['latin'],
-  variable: '--font-serif',
-})
-
 export const metadata: Metadata = {
-  title: 'DISPATCH - AI-Native Autonomous Newsroom',
-  description: 'Experience the future of journalism with DISPATCH, an AI-native autonomous newsroom delivering verified news with complete source transparency.',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://dispatch-1news.vercel.app'),
+  title: { default: 'DISPATCH · Evidence-linked AI reporting', template: '%s · DISPATCH' },
+  description: 'AI-authored reporting that is published only after strict evidence and independent verification gates.',
   keywords: ['news', 'AI', 'journalism', 'transparency', 'sources'],
   authors: [{ name: 'DISPATCH' }],
   icons: {
     icon: '/dispatch-sign.svg',
-    apple: '/apple-icon.png',
+    apple: '/apple-icon.svg',
   },
+  alternates: { canonical: '/' },
+  manifest: '/manifest.webmanifest',
+  openGraph: {
+    type: 'website', siteName: 'DISPATCH', title: 'DISPATCH · Evidence-linked AI reporting',
+    description: 'AI-authored reporting with evidence-linked verification.', url: '/',
+    images: [{ url: '/dispatch-social.svg', width: 1200, height: 630, alt: 'DISPATCH' }],
+  },
+  robots: { index: true, follow: true },
 }
 
 export const viewport: Viewport = {
@@ -35,22 +35,23 @@ export const viewport: Viewport = {
   ],
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  // Opt every document into dynamic rendering so Next can propagate the
+  // per-request CSP nonce from the proxy onto framework scripts.
+  await headers()
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${_playfair.variable} font-sans antialiased flex flex-col min-h-screen bg-background text-foreground`}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem enableColorScheme>
-          <Header />
-          <main className="grow">
-            {children}
-          </main>
-          <Footer />
-        </ThemeProvider>
-        <Analytics />
+    <html lang="en" data-scroll-behavior="smooth">
+      <body className="flex min-h-screen flex-col bg-background font-sans text-foreground antialiased">
+        <a href="#main-content" className="sr-only z-[100] bg-background p-3 focus:not-sr-only focus:fixed focus:left-3 focus:top-3">Skip to main content</a>
+        <Header />
+        <main id="main-content" className="grow" tabIndex={-1}>
+          {children}
+        </main>
+        <Footer />
       </body>
     </html>
   )

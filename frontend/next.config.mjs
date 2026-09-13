@@ -9,12 +9,8 @@ const nextConfig = {
   turbopack: {
     root: __dirname,
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  images: {
-    unoptimized: true,
-  },
+  poweredByHeader: false,
+  images: { formats: ['image/avif', 'image/webp'] },
 }
 
 export default nextConfig

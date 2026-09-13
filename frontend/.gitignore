@@ -16,3 +16,9 @@ node_modules
 .next/
 .DS_Store
 .dispatch-data/
+coverage/
+playwright-report/
+test-results/
+output/
+.lighthouseci/
+tsconfig.tsbuildinfo

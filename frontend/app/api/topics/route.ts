@@ -1,7 +1,3 @@
-import { NextResponse } from 'next/server'
-import { getTopics } from '@/lib/newsdata'
+import { retiredRoute } from '@/lib/http'
 
-export async function GET() {
-  const topics = await getTopics()
-  return NextResponse.json({ topics })
-}
+export const GET = retiredRoute

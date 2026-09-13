@@ -1,3 +1,5 @@
+import { normalizeForCompare, normalizeTopic } from '@/lib/news-provider-utils'
+
 const NEWSDATA_BASE_URL = 'https://newsdata.io/api/1'
 const ONE_HOUR_MS = 60 * 60 * 1000
 
@@ -19,19 +21,6 @@ export type NewsSearchHit = {
 const globalForNewsData = globalThis as typeof globalThis & {
   __dispatchNewsDataCache?: CachedTopics
   __dispatchNewsSearchCache?: Record<string, { results: NewsSearchHit[]; fetchedAt: number }>
-}
-
-function normalizeTopic(value: string) {
-  return value.trim().replace(/\s+/g, ' ')
-}
-
-function normalizeForCompare(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 function isLowQualityExcerpt(value: string) {
@@ -96,6 +85,7 @@ export async function getTopics(): Promise<string[]> {
 
     const response = await fetch(url.toString(), {
       next: { revalidate: 3600 },
+      signal: AbortSignal.timeout(5_000),
     })
 
     if (!response.ok) {
@@ -186,6 +176,7 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
 
     const response = await fetch(url.toString(), {
       next: { revalidate: 3600 },
+      signal: AbortSignal.timeout(5_000),
     })
 
     if (!response.ok) {
@@ -205,7 +196,7 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
     }
 
     const rawResults = (payload.results ?? [])
-      .map((item) => {
+      .map<NewsSearchHit | null>((item) => {
         const url = item.link?.trim() || item.source_url?.trim() || ''
         if (!url) {
           return null
@@ -226,10 +217,10 @@ export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
           source,
           excerpt: cleanExcerpt(item.description?.trim() || '', item.title?.trim() || topic),
           publishedAt: item.pubDate?.trim() || 'Today',
-          imageUrl: item.image_url?.trim() || undefined,
+          ...(item.image_url?.trim() ? { imageUrl: item.image_url.trim() } : {}),
         }
       })
-      .filter((item): item is NewsSearchHit => Boolean(item))
+      .filter((item): item is NewsSearchHit => item !== null)
 
     const seenTitles = new Set<string>()
     const results = rawResults.filter((hit) => {

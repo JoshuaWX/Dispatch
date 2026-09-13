@@ -1,5 +1,3 @@
-import Link from 'next/link'
-
 const infoLinks = [
   { href: '/careers', label: 'Careers' },
   { href: '/legal', label: 'Legal' },
@@ -15,13 +13,13 @@ export function InfoPageLinks() {
       </p>
       <div className="flex flex-wrap gap-3">
         {infoLinks.map((link) => (
-          <Link
+          <a
             key={link.href}
             href={link.href}
             className="rounded-sm border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground hover:border-primary/40 no-underline"
           >
             {link.label}
-          </Link>
+          </a>
         ))}
       </div>
     </nav>
