@@ -3,8 +3,8 @@ import { GoogleGenAI } from '@google/genai'
 const model = process.env.GEMINI_MODEL?.trim()
 const apiKey = process.env.GEMINI_API_KEY?.trim()
 
-if (model !== 'gemini-2.5-flash') {
-  throw new Error('GEMINI_MODEL must be exactly gemini-2.5-flash')
+if (model !== 'gemini-3.6-flash') {
+  throw new Error('GEMINI_MODEL must be exactly gemini-3.6-flash')
 }
 if (!apiKey) throw new Error('GEMINI_API_KEY is required')
 
@@ -33,7 +33,7 @@ try {
         required: ['ok', 'model'],
         properties: {
           ok: { type: 'boolean' },
-          model: { type: 'string', enum: ['gemini-2.5-flash'] },
+          model: { type: 'string', enum: ['gemini-3.6-flash'] },
         },
       },
       thinkingConfig: { thinkingBudget: 128 },

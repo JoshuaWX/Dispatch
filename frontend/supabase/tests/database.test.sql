@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(35);
+select plan(37);
 
 select has_table('public', 'dispatch_articles', 'articles table exists');
 select has_table('public', 'dispatch_pipeline_runs', 'pipeline runs table exists');
@@ -85,6 +85,22 @@ select is(
   )->>'reserved',
   'true',
   'budget can be reserved below the daily allowance'
+);
+select lives_ok(
+  $$select public.dispatch_settle_ai_budget(
+    (select id from public.dispatch_ai_reservations
+      where run_id = '00000000-0000-4000-8000-000000000001'
+      order by created_at desc limit 1),
+    0.001875, 500, 400
+  )$$,
+  'budget settlement records a Gemini 3.6 Flash usage record'
+);
+select is(
+  (select model from public.dispatch_ai_usage
+    where run_id = '00000000-0000-4000-8000-000000000001'
+    order by created_at desc limit 1),
+  'gemini-3.6-flash',
+  'new AI usage is attributed to Gemini 3.6 Flash'
 );
 
 select throws_ok(

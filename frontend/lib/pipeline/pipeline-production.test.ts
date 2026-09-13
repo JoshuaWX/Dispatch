@@ -48,7 +48,7 @@ const draft = {
 describe('Gemini production adapter', () => {
   beforeEach(() => {
     vi.stubEnv('GEMINI_API_KEY', 'test-gemini-key')
-    vi.stubEnv('GEMINI_MODEL', 'gemini-2.5-flash')
+    vi.stubEnv('GEMINI_MODEL', 'gemini-3.6-flash')
     gemini.countTokens.mockReset().mockResolvedValue({ totalTokens: 500 })
     gemini.generateContent.mockReset()
   })
@@ -58,7 +58,7 @@ describe('Gemini production adapter', () => {
     vi.unstubAllEnvs()
   })
 
-  it('uses only Gemini 2.5 Flash with the required drafting controls and records thinking usage', async () => {
+  it('uses only Gemini 3.6 Flash with the required drafting controls and records thinking usage', async () => {
     gemini.generateContent.mockResolvedValue({
       text: JSON.stringify(draft),
       candidates: [{ finishReason: 'STOP' }],
@@ -67,10 +67,10 @@ describe('Gemini production adapter', () => {
 
     const result = await createProductionDependencies().model.draft(topic, sources)
 
-    expect(result).toMatchObject({ usage: { inputTokens: 500, outputTokens: 400, costUsd: 0.00115 } })
+    expect(result).toMatchObject({ usage: { inputTokens: 500, outputTokens: 400, costUsd: 0.001875 } })
     const request = gemini.generateContent.mock.calls[0][0]
     expect(request).toMatchObject({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       config: {
         temperature: 0.2,
         maxOutputTokens: 2800,

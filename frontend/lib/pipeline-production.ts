@@ -20,10 +20,10 @@ import { fetchArticleSafely } from '@/lib/security/safe-fetch'
 import { getServiceSupabase } from '@/lib/supabase-server'
 import { ModelContentError, RetryableModelError, type PipelineDependencies } from '@/lib/pipeline'
 
-const GEMINI_MODEL = 'gemini-2.5-flash'
+const GEMINI_MODEL = 'gemini-3.6-flash'
 const PRICE_REVIEW_AFTER = new Date('2027-01-01T00:00:00.000Z')
-const INPUT_PRICE_PER_MILLION = 0.3
-const OUTPUT_PRICE_PER_MILLION = 2.5
+const INPUT_PRICE_PER_MILLION = 0.75
+const OUTPUT_PRICE_PER_MILLION = 3.75
 const MAX_RESEARCH_SOURCES = 7
 const MAX_EXCERPT_CHARS = 1_500
 const MAX_DRAFT_INPUT_CHARS = 40_000
@@ -168,7 +168,7 @@ async function generateJson<T>(input: {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
   if (!apiKey) throw new Error('Gemini is unavailable')
   if ((process.env.GEMINI_MODEL?.trim() || GEMINI_MODEL) !== GEMINI_MODEL) {
-    throw new Error('Only gemini-2.5-flash is allowed')
+    throw new Error('Only gemini-3.6-flash is allowed')
   }
   if (new Date() >= PRICE_REVIEW_AFTER) throw new Error('Gemini pricing metadata requires review')
 
