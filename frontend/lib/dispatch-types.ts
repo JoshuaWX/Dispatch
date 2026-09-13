@@ -1,60 +1,35 @@
-export type ArticleCategory = 'World' | 'Tech' | 'Business' | 'Science'
-
-export type ConfidenceLevel = 'confirmed' | 'reported' | 'alleged'
-
-export type PipelineStage =
-  | 'trend-intake'
-  | 'research'
-  | 'writing'
-  | 'quality-gate'
-  | 'publish'
-
-export type PipelineStatus = 'idle' | 'running' | 'degraded'
+export const ARTICLE_CATEGORIES = ['World', 'Tech', 'Business', 'Science'] as const
+export type ArticleCategory = (typeof ARTICLE_CATEGORIES)[number]
+export type PublicationStatus = 'draft' | 'published' | 'quarantined' | 'retracted'
+export type VerificationStatus = 'pending' | 'passed' | 'failed'
+export type ArticleFormat = 'brief' | 'article'
+export type ArticleGrade = 'A' | 'B' | 'C'
+export type Reliability = 'high' | 'medium' | 'low'
+export type PipelineTrigger = 'scheduled' | 'manual'
+export type PipelineStage = 'trend-intake' | 'research' | 'writing' | 'quality-gate' | 'publish'
+export type PipelineStatus = 'idle' | 'running' | 'degraded' | 'paused'
 
 export interface TrendTopic {
-  id: string
   topic: string
   category: ArticleCategory
   score: number
-  summary: string
-  source: string
-  sourceUrl?: string
-  publishedAt: string
 }
 
-export interface ResearchSource {
+export interface ArticleSource {
+  id: string
   name: string
   url: string
-  credibilityNotes: string
+  domain: string
+  reliability: Reliability
+  excerpt: string
+  publishedAt: string
+  contentHash: string
 }
 
-export interface KeyFact {
-  fact: string
-  source: string
-  confidence: ConfidenceLevel
-}
-
-export interface TimelineEntry {
-  date: string
-  event: string
-}
-
-export interface ConflictingClaim {
-  claim: string
-  source: string
-  counterclaim: string
-  counterSource: string
-}
-
-export interface ResearchBrief {
-  topic: string
-  category: ArticleCategory
-  sources: ResearchSource[]
-  keyFacts: KeyFact[]
-  namedSources: string[]
-  timeline: TimelineEntry[]
-  conflictingClaims: ConflictingClaim[]
-  backgroundContext: string
+export interface MaterialClaim {
+  id: string
+  text: string
+  sourceIds: string[]
 }
 
 export interface ArticleDraft {
@@ -64,28 +39,34 @@ export interface ArticleDraft {
   body: string
   category: ArticleCategory
   tags: string[]
+  claims: MaterialClaim[]
+  whatWeDoNotKnow: string
+  whatHappensNext: string
+}
+
+export interface VerificationResult {
+  sourceDiversity: number
+  factualConfidence: number
+  overallScore: number
+  flags: string[]
+  unsupportedClaims: string[]
+  overstatement: boolean
+  conflicts: boolean
+}
+
+export interface ModelUsage {
+  inputTokens: number
+  outputTokens: number
+  costUsd: number
 }
 
 export interface QualityScore {
   sourceDiversity: number
-  sensationalism: number
   factualConfidence: number
-  ledeStrength: number
   overallScore: number
   flaggedClaims: string[]
   publishRecommendation: boolean
 }
-
-export interface ArticleSource {
-  id: string
-  name: string
-  url: string
-  reliability: 'high' | 'medium' | 'low'
-  excerpt: string
-  publishedAt: string
-}
-
-export type ArticleGrade = 'A' | 'B' | 'C'
 
 export interface PublishedArticle {
   id: string
@@ -99,18 +80,90 @@ export interface PublishedArticle {
   category: ArticleCategory
   tags: string[]
   sources: ArticleSource[]
+  claims: MaterialClaim[]
   readingTime: number
   publishedAt: string
   qualityScore: QualityScore
-  verificationStatus: 'verified' | 'pending' | 'unverified'
-  grade?: ArticleGrade
-  gradeBadge?: string
-  wordCount?: number
-  qualityScoreValue?: number
-  whatWeDoNotKnow?: string
-  whatHappensNext?: string
-  pipelineRunId?: string
-  factCheckWarnings?: string[]
+  publicationStatus: PublicationStatus
+  verificationStatus: VerificationStatus
+  format: ArticleFormat
+  grade: ArticleGrade
+  wordCount: number
+  whatWeDoNotKnow: string
+  whatHappensNext: string
+  pipelineRunId: string
+  factCheckWarnings: string[]
+  trendScore: number
+  viewCount: number
+}
+
+export interface ArticleSummary {
+  id: string
+  topic: string
+  headline: string
+  subheadline: string
+  lede: string
+  category: ArticleCategory
+  tags: string[]
+  readingTime: number
+  publishedAt: string
+  qualityScore: QualityScore
+  format: ArticleFormat
+  grade: ArticleGrade
+  trendScore: number
+  viewCount: number
+  evidenceCount: number
+}
+
+export interface ArticlePage {
+  articles: ArticleSummary[]
+  count: number
+  nextCursor: string | null
+  facets: Array<{ category: ArticleCategory; count: number }>
+}
+
+export interface PipelineRunInput {
+  trigger: PipelineTrigger
+  topic?: string
+  idempotencyKey: string
+  requestId?: string
+}
+
+export type PipelineReason =
+  | 'banned_language'
+  | 'budget_exhausted'
+  | 'concurrent_run'
+  | 'daily_publication_limit'
+  | 'duplicate_run'
+  | 'duplicated_passages'
+  | 'factual_confidence_below_threshold'
+  | 'headline_overstatement'
+  | 'insufficient_material_claims'
+  | 'insufficient_recent_sources'
+  | 'insufficient_source_diversity'
+  | 'insufficient_sources'
+  | 'invalid_claim_sources'
+  | 'invalid_model_output'
+  | 'invalid_verification_output'
+  | 'missing_high_reliability_source'
+  | 'missing_independent_corroboration'
+  | 'model_unavailable'
+  | 'no_eligible_topic'
+  | 'overall_score_below_threshold'
+  | 'persistence_failed'
+  | 'pipeline_error'
+  | 'publishing_paused'
+  | 'source_diversity_below_threshold'
+  | 'unresolved_conflicts'
+  | 'unsupported_numbers'
+  | 'verification_flags'
+
+export type PipelineRunResult = {
+  status: 'published' | 'rejected' | 'skipped' | 'failed'
+  runId: string
+  articleId?: string
+  topic?: string
+  reason?: PipelineReason
 }
 
 export interface PipelineEvent {
@@ -130,16 +183,5 @@ export interface PipelineSnapshot {
   lastRunAt: string | null
   lastSuccessAt: string | null
   message: string
-  recentEvents: PipelineEvent[]
-}
-
-export interface GenerateStoryInput {
-  topic?: string
-  strict?: boolean
-  scheduled?: boolean
-}
-
-export interface QaRequestBody {
-  articleId: string
-  question: string
+  updatedAt: string
 }

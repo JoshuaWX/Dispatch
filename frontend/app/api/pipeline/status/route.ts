@@ -1,6 +1,11 @@
-import { NextResponse } from 'next/server'
-import { getPipelineStatus } from '@/lib/pipeline'
+import { jsonResponse, requestId, unavailable } from '@/lib/http'
+import { getPublicPipelineStatus } from '@/lib/pipeline-status'
 
-export async function GET() {
-  return NextResponse.json(await getPipelineStatus())
+export async function GET(request: Request) {
+  const id = requestId(request)
+  try {
+    return jsonResponse(await getPublicPipelineStatus(), {}, id)
+  } catch {
+    return unavailable(id)
+  }
 }

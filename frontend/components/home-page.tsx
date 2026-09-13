@@ -1,280 +1,59 @@
-'use client'
-
-import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
 import { ArticleCard } from '@/components/article-card'
 import { NewsTicker } from '@/components/news-ticker'
-import { TrustStrip } from '@/components/trust-strip'
-import { Spinner } from '@/components/ui/spinner'
+import type { ArticlePage } from '@/lib/dispatch-types'
 
-type ApiArticle = {
-  id: string
-  topic: string
-  headline: string
-  subheadline: string
-  lede: string
-  body: string
-  imageUrl?: string
-  category: string
-  tags: string[]
-  sources: Array<{ name: string }>
-  readingTime: number
-  publishedAt: string
-  viewCount?: number
-  qualityScore: { overallScore: number }
-}
-
-export function HomePage() {
-  const [articles, setArticles] = useState<ApiArticle[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-
-  useEffect(() => {
-    let mounted = true
-
-    const loadArticles = async () => {
-      try {
-        const response = await fetch('/api/articles', { cache: 'no-store' })
-        if (!mounted) {
-          return
-        }
-
-        if (!response.ok) {
-          setArticles([])
-          return
-        }
-
-        const json = (await response.json()) as { articles?: ApiArticle[] }
-        if (Array.isArray(json.articles)) {
-          setArticles(json.articles)
-        } else {
-          setArticles([])
-        }
-      } catch {
-        if (mounted) {
-          setArticles([])
-        }
-      } finally {
-        if (mounted) {
-          setIsLoading(false)
-        }
-      }
-    }
-
-    void loadArticles()
-    return () => {
-      mounted = false
-    }
-  }, [])
-
-  const mapped = useMemo(
-    () =>
-      articles.map((article, index) => ({
-        id: article.id,
-        title: article.headline,
-        description: article.subheadline || article.lede,
-        category: article.category,
-        categoryColor: 'default' as const,
-        imageUrl: article.imageUrl,
-        publishedAt: new Date(article.publishedAt).toLocaleString(),
-        viewCount: article.viewCount ?? 0,
-        sources: article.sources.map((source) => source.name),
-        featured: index === 0,
-      })),
-    [articles]
-  )
-
-  const featuredArticle = mapped[0] ?? null
-  const trendingArticles = mapped.slice(1, 4)
-
-  const categorySummary = useMemo(() => {
-    const counts = new Map<string, number>()
-
-    mapped.forEach((article) => {
-      counts.set(article.category, (counts.get(article.category) ?? 0) + 1)
-    })
-
-    return Array.from(counts.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((left, right) => right.count - left.count)
-  }, [mapped])
-
-  const liveSummary = useMemo(() => {
-    const sourceCount = mapped[0]?.sources.length ?? 0
-    const averageViews =
-      mapped.length > 0
-        ? Math.round(mapped.reduce((sum, article) => sum + (article.viewCount ?? 0), 0) / mapped.length)
-        : 0
-    const topCategory = categorySummary[0]?.name ?? 'n/a'
-
-    return {
-      sourceCount,
-      averageViews,
-      topCategory,
-    }
-  }, [categorySummary, mapped])
-
+export function HomePage({ recent, trending }: { recent: ArticlePage; trending: ArticlePage }) {
+  const featured = recent.articles[0]
+  const remaining = recent.articles.slice(1, 7)
   return (
-    <div className="min-h-screen bg-background">
-      <NewsTicker />
-
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
-        <div className="mb-12">
-          <p className="mb-4 inline-flex rounded-sm border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
-            Real-time autonomous newsroom
+    <>
+      <NewsTicker articles={recent.articles} />
+      <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
+        <div className="max-w-3xl">
+          <p className="mb-4 text-xs font-bold uppercase tracking-[0.2em] text-primary">Evidence before publication</p>
+          <h1>News built for scrutiny.</h1>
+          <p className="mt-5 max-w-2xl text-lg leading-8 text-muted-foreground">
+            DISPATCH is an AI-authored newsroom. Every public story passes a separate fact check and links its material claims to retrieved publisher evidence.
           </p>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-4">
-            Breaking News, Built for the <span className="text-primary">Trust Era</span>
-          </h1>
-          <p className="text-lg sm:text-xl text-muted-foreground text-balance max-w-2xl">
-            DISPATCH turns signal into verified reporting in minutes, not cycles. Readers get
-            source-linked facts, accountable context, and publication-grade clarity from an AI
-            newsroom that never sleeps.
-          </p>
+          <div className="mt-7 flex flex-wrap gap-3">
+            <a href="/explore" className="min-h-11 bg-primary px-5 py-3 font-semibold text-primary-foreground">Browse verified reporting</a>
+            <a href="/methodology" className="min-h-11 border border-border px-5 py-3 font-semibold">Read the methodology</a>
+          </div>
         </div>
 
-        <div className="mb-16">
-          {featuredArticle ? (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2">
-                <ArticleCard {...featuredArticle} />
-              </div>
-              <div className="flex flex-col gap-4">
-                <div className="bg-card rounded-lg border border-border p-6">
-                  <h3 className="text-sm font-semibold text-foreground mb-3">Verification Status</h3>
-                  <TrustStrip
-                    verificationStatus="verified"
-                    sourceCount={liveSummary.sourceCount}
-                    lastUpdated={mapped[0]?.publishedAt ?? 'just now'}
-                    aiGenerated
-                  />
-                </div>
-                <div className="bg-card rounded-lg border border-border p-6 grow">
-                  <h3 className="text-sm font-semibold text-foreground mb-3">Live Signals</h3>
-                  <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span>{liveSummary.topCategory} is the most active category right now</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span>{liveSummary.sourceCount} sources visible on the featured story</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span>Average live story views: {liveSummary.averageViews.toLocaleString()}</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          ) : isLoading ? (
-            <div className="bg-card rounded-lg border border-border p-10 text-center">
-              <div className="mx-auto mb-3 inline-flex items-center justify-center rounded-full border border-border p-3">
-                <Spinner className="size-5 text-primary" />
-              </div>
-              <h3 className="text-xl font-semibold text-foreground mb-2">Loading stories...</h3>
-              <p className="text-muted-foreground">The live desk is pulling the latest published articles.</p>
-            </div>
-          ) : (
-            <div className="bg-card rounded-lg border border-border p-8 text-center">
-              <h3 className="text-xl font-semibold text-foreground mb-2">No generated stories yet</h3>
-              <p className="text-muted-foreground">
-                Autonomous generation is warming up. Your first AI story should appear shortly.
-              </p>
+        <div className="mt-12">
+          {featured ? <ArticleCard article={featured} featured /> : (
+            <div className="border border-dashed border-border bg-card p-8">
+              <h2 className="text-2xl">Publishing is safely paused</h2>
+              <p className="mt-3 max-w-2xl text-muted-foreground">No article is public until it satisfies the new evidence and verification gate.</p>
             </div>
           )}
         </div>
 
-        <div>
-          <div className="mb-8">
-            <h2 className="text-3xl font-bold text-foreground">Trending Now</h2>
-            <p className="text-muted-foreground mt-2">Most viewed stories across all categories</p>
-          </div>
-
-          {trendingArticles.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {trendingArticles.map((article) => (
-                <ArticleCard key={article.id} {...article} />
-              ))}
+        {remaining.length > 0 && (
+          <section aria-labelledby="latest-heading" className="mt-16">
+            <div className="mb-7 flex items-end justify-between gap-4 border-b border-border pb-4">
+              <h2 id="latest-heading">Latest reporting</h2>
+              <a href="/explore?sort=recent" className="text-sm font-semibold text-primary underline-offset-4 hover:underline">View all</a>
             </div>
-          ) : (
-            <p className="text-muted-foreground">No additional generated stories yet.</p>
-          )}
-        </div>
-      </section>
-
-      <section className="bg-muted/30 border-t border-border py-12 sm:py-16">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h2 className="text-2xl sm:text-3xl font-bold text-foreground mb-8">Browse by Category</h2>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            {categorySummary.length > 0 ? (
-              categorySummary.map((cat) => (
-                <Link
-                  key={cat.name}
-                  href={`/explore?category=${encodeURIComponent(cat.name.toLowerCase().replace(/\s+/g, '-'))}`}
-                  className="group block p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-accent/5 transition-all text-center no-underline"
-                >
-                  <p className="font-semibold text-sm text-foreground group-hover:text-primary transition-colors">
-                    {cat.name}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">{cat.count} stories</p>
-                </Link>
-              ))
-            ) : (
-              <p className="col-span-full text-sm text-muted-foreground">
-                Categories will appear after generated stories are published.
-              </p>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-linear-to-br from-primary/10 via-foreground/3 to-transparent border-t border-border py-12 sm:py-16">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <section className="mb-10 rounded-sm border border-border bg-card/70 p-4 text-left sm:p-6">
-            <h2 className="mb-4 text-base font-semibold uppercase tracking-[0.16em] text-foreground/85 sm:text-lg">
-              How Dispatch Works
-            </h2>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-              <div className="rounded-sm border border-border bg-background/65 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">01 Research</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Cross-source fact gathering with structured evidence extraction.
-                </p>
-              </div>
-              <div className="rounded-sm border border-border bg-background/65 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">02 Write</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Reported article drafting with attribution and newsroom tone.
-                </p>
-              </div>
-              <div className="rounded-sm border border-border bg-background/65 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">03 Quality Gate</p>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Only stories that pass confidence and sourcing checks are published.
-                </p>
-              </div>
+            <div className="grid gap-7 md:grid-cols-2 lg:grid-cols-3">
+              {remaining.map((article) => <ArticleCard key={article.id} article={article} />)}
             </div>
           </section>
+        )}
 
-          <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Get News You Can Trust</h2>
-          <p className="text-lg text-muted-foreground mb-8">
-            Sign up for personalized news briefings curated by AI with full source transparency.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button className="px-8 py-3 bg-primary text-primary-foreground rounded-lg font-semibold hover:bg-primary/90 transition-colors">
-              Subscribe Now
-            </button>
-            <Link
-              href="/explore"
-              className="px-8 py-3 border border-primary text-primary rounded-lg font-semibold hover:bg-primary/10 transition-colors no-underline"
-            >
-              Learn More
-            </Link>
-          </div>
-        </div>
+        {trending.articles.length > 0 && (
+          <section aria-labelledby="trending-heading" className="mt-16">
+            <div className="mb-7 border-b border-border pb-4">
+              <h2 id="trending-heading">Trending by evidence velocity</h2>
+              <p className="mt-2 text-sm text-muted-foreground">Ranked from publisher velocity, recency decay, verification score, and reader activity.</p>
+            </div>
+            <div className="grid gap-7 md:grid-cols-2 lg:grid-cols-3">
+              {trending.articles.slice(0, 3).map((article) => <ArticleCard key={article.id} article={article} />)}
+            </div>
+          </section>
+        )}
       </section>
-    </div>
+    </>
   )
 }

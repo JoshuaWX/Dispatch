@@ -1,4 +1,5 @@
 import type { NewsSearchHit } from '@/lib/newsapi'
+import { normalizeForCompare, normalizeTopic } from '@/lib/news-provider-utils'
 
 const THE_NEWS_API_BASE_URL = 'https://api.thenewsapi.com/v1'
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
@@ -7,19 +8,6 @@ type TheNewsApiSearchCache = Record<string, { results: NewsSearchHit[]; fetchedA
 
 const globalForTheNewsApi = globalThis as typeof globalThis & {
   __dispatchTheNewsApiSearchCache?: TheNewsApiSearchCache
-}
-
-function normalizeTopic(value: string) {
-  return value.trim().replace(/\s+/g, ' ')
-}
-
-function normalizeForCompare(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> {
@@ -50,6 +38,7 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
 
     const response = await fetch(url.toString(), {
       next: { revalidate: 1800 },
+      signal: AbortSignal.timeout(5_000),
     })
 
     if (!response.ok) {

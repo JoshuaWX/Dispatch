@@ -1,35 +1,16 @@
-import { NextResponse } from 'next/server'
-import { getPublishedArticle } from '@/lib/pipeline'
-import { getArticleViewCount, incrementArticleViewCount } from '@/lib/store'
+import { getPublicArticle } from '@/lib/articles'
+import { apiError, jsonResponse, requestId, unavailable } from '@/lib/http'
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const article = await getPublishedArticle(id)
+type Context = { params: Promise<{ id: string }> }
 
-  if (!article) {
-    return NextResponse.json({ error: 'Article not found' }, { status: 404 })
+export async function GET(request: Request, { params }: Context) {
+  const requestIdentifier = requestId(request)
+  try {
+    const article = await getPublicArticle((await params).id)
+    return article
+      ? jsonResponse(article, {}, requestIdentifier)
+      : apiError(requestIdentifier, 404, 'article_not_found', 'Article not found.')
+  } catch {
+    return unavailable(requestIdentifier)
   }
-
-  return NextResponse.json({
-    ...article,
-    viewCount: getArticleViewCount(id),
-  })
-}
-
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const article = await getPublishedArticle(id)
-
-  if (!article) {
-    return NextResponse.json({ error: 'Article not found' }, { status: 404 })
-  }
-
-  const viewCount = incrementArticleViewCount(id)
-  return NextResponse.json({ id, viewCount })
 }

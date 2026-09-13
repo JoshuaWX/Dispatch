@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { InfoPageLinks } from '@/components/info-page-links'
 
 export default function LegalPage() {
@@ -13,18 +12,18 @@ export default function LegalPage() {
         </p>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <Link href="/privacy" className="rounded-lg border border-border bg-card p-5 no-underline">
+          <a href="/privacy" className="rounded-lg border border-border bg-card p-5 no-underline">
             <h2 className="text-lg font-semibold text-foreground">Privacy Policy</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               What limited usage and technical data we process while there is no signup flow.
             </p>
-          </Link>
-          <Link href="/terms" className="rounded-lg border border-border bg-card p-5 no-underline">
+          </a>
+          <a href="/terms" className="rounded-lg border border-border bg-card p-5 no-underline">
             <h2 className="text-lg font-semibold text-foreground">Terms of Service</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Usage rules, rights, and responsibilities for users and platform operators.
             </p>
-          </Link>
+          </a>
         </div>
 
         <InfoPageLinks />

@@ -1,128 +1,25 @@
-'use client'
-
-import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'next/navigation'
-import { ArrowLeft } from 'lucide-react'
+import type { Metadata } from 'next'
 import { ArticleCard } from '@/components/article-card'
+import { listPublicArticles } from '@/lib/articles'
 
-type ApiArticle = {
-  id: string
-  headline: string
-  subheadline: string
-  lede: string
-  category: string
-  imageUrl?: string
-  readingTime: number
-  publishedAt: string
-  tags: string[]
-  sources: Array<{ name: string }>
-  qualityScore?: { overallScore: number }
+type Props = { params: Promise<{ tag: string }> }
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const tag = decodeURIComponent((await params).tag).slice(0, 40)
+  return { title: `Reporting tagged ${tag}`, alternates: { canonical: `/tag/${encodeURIComponent(tag)}` } }
 }
 
-const MIN_IMAGE_CONFIDENCE = 7
-
-export default function TagPage() {
-  const params = useParams()
-  const rawTag = typeof params?.tag === 'string' ? params.tag : ''
-  const tag = decodeURIComponent(rawTag).toLowerCase()
-
-  const [articles, setArticles] = useState<ApiArticle[]>([])
-  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
-
-  useEffect(() => {
-    let mounted = true
-
-    const loadArticles = async () => {
-      try {
-        setLoadState('loading')
-        const response = await fetch('/api/articles', { cache: 'no-store' })
-        if (!response.ok) {
-          setLoadState('error')
-          return
-        }
-
-        const json = (await response.json()) as { articles?: ApiArticle[] }
-        if (!mounted) return
-
-        setArticles(Array.isArray(json.articles) ? json.articles : [])
-        setLoadState('ready')
-      } catch {
-        if (mounted) {
-          setLoadState('error')
-        }
-      }
-    }
-
-    void loadArticles()
-    return () => {
-      mounted = false
-    }
-  }, [])
-
-  const tagStories = useMemo(() => {
-    return articles
-      .filter((article) => article.tags.some((articleTag) => articleTag.toLowerCase() === tag))
-      .map((article) => ({
-        id: article.id,
-        title: article.headline,
-        description: article.subheadline || article.lede,
-        category: article.category,
-        imageUrl:
-          (article.qualityScore?.overallScore ?? 0) >= MIN_IMAGE_CONFIDENCE
-            ? article.imageUrl
-            : undefined,
-        publishedAt: new Date(article.publishedAt).toLocaleString(),
-        sources: article.sources.map((source) => source.name),
-      }))
-  }, [articles, tag])
-
-  if (loadState === 'loading') {
-    return (
-      <main className="min-h-screen bg-background">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <p className="text-muted-foreground">Loading stories...</p>
-        </div>
-      </main>
-    )
-  }
-
-  if (loadState === 'error') {
-    return (
-      <main className="min-h-screen bg-background">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <p className="text-muted-foreground">Could not load tag stories right now.</p>
-        </div>
-      </main>
-    )
-  }
-
+export default async function TagPage({ params }: Props) {
+  const tag = decodeURIComponent((await params).tag).trim().toLowerCase().slice(0, 40)
+  const page = await listPublicArticles({ limit: 50 }).catch(() => null)
+  const articles = (page?.articles ?? []).filter((article) => article.tags.some((item) => item.toLowerCase() === tag))
   return (
-    <main className="min-h-screen bg-background">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground mb-6 no-underline hover:no-underline"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Home
-        </Link>
-
-        <h1 className="text-4xl font-bold text-foreground mb-2">Tag: #{tag}</h1>
-        <p className="text-muted-foreground mb-8">{tagStories.length} stories found</p>
-
-        {tagStories.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {tagStories.map((story) => (
-              <ArticleCard key={story.id} {...story} />
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-border bg-card p-8">
-            <p className="text-muted-foreground">No stories found for this tag yet.</p>
-          </div>
-        )}
-      </div>
-    </main>
+    <section className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+      <a href="/explore" className="inline-flex min-h-11 items-center text-sm font-semibold text-primary">← Explore all reporting</a>
+      <h1 className="mt-5">Tag: {tag}</h1>
+      <p className="mt-3 text-muted-foreground">{articles.length} verified {articles.length === 1 ? 'story' : 'stories'}</p>
+      {articles.length > 0 ? <div className="mt-8 grid gap-7 md:grid-cols-2 lg:grid-cols-3">{articles.map((article) => <ArticleCard key={article.id} article={article} />)}</div>
+        : <p className="mt-8 border border-dashed border-border p-8 text-muted-foreground">No verified stories use this tag.</p>}
+    </section>
   )
 }

@@ -1,58 +1,29 @@
-import { NextResponse } from 'next/server'
+import { apiError, jsonResponse, requestId, unavailable } from '@/lib/http'
 import { runPipeline } from '@/lib/pipeline'
+import { authorizeBearer } from '@/lib/security/auth'
 
 export const runtime = 'nodejs'
+export const maxDuration = 90
 
-function isCronRequest(request: Request) {
-  if (process.env.NODE_ENV !== 'production') {
-    return true
-  }
-
-  if (request.headers.get('x-vercel-cron') === '1') {
-    return true
-  }
-
-  const schedulerSecret = process.env.SCHEDULER_SECRET?.trim()
-  if (!schedulerSecret) {
-    return false
-  }
-
-  const authHeader = request.headers.get('authorization')?.trim()
-  if (!authHeader || !authHeader.toLowerCase().startsWith('bearer ')) {
-    return false
-  }
-
-  const token = authHeader.slice(7).trim()
-  return token.length > 0 && token === schedulerSecret
+function twoHourKey(now = new Date()) {
+  const bucketHour = Math.floor(now.getUTCHours() / 2) * 2
+  return `cron:${now.toISOString().slice(0, 10)}:${String(bucketHour).padStart(2, '0')}`
 }
 
-export async function GET(request: Request) {
-  if (!isCronRequest(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export async function POST(request: Request) {
+  const id = requestId(request)
+  if (!authorizeBearer(request, process.env.SCHEDULER_SECRET)) {
+    return apiError(id, 401, 'unauthorized', 'Authentication is required.')
   }
-
   try {
-    const requestUrl = new URL(request.url)
-    const strictParam = requestUrl.searchParams.get('strict')
-    const strict = strictParam === 'true'
-
-    console.log('[CRON] Starting generation. AI_PROVIDER:', process.env.AI_PROVIDER || 'not set', 'GROQ_KEY present:', !!process.env.GROQ_API_KEY)
-    const result = await runPipeline({ strict, scheduled: true })
-    console.log('[CRON] Result - published:', result.published, 'topic:', result.topic, 'research error:', result.research?.error)
-    return NextResponse.json({
-      ok: true,
-      published: result.published,
-      topic: result.topic,
-      articleId: result.article?.id ?? null,
-    })
-  } catch (error) {
-    console.error('[CRON] Error:', error instanceof Error ? error.message : 'Unknown error')
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : 'Cron generation failed',
-      },
-      { status: 500 }
-    )
+    const result = await runPipeline({ trigger: 'scheduled', idempotencyKey: twoHourKey(), requestId: id })
+    return jsonResponse(result, { status: result.status === 'failed' ? 503 : 200 }, id)
+  } catch {
+    return unavailable(id)
   }
+}
+
+export function GET(request: Request) {
+  const id = requestId(request)
+  return apiError(id, 405, 'method_not_allowed', 'Use POST for scheduled runs.')
 }

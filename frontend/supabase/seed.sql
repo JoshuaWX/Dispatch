@@ -1,0 +1,1 @@
+-- Production data is never seeded. Tests create transaction-scoped fixtures.
