@@ -4,7 +4,7 @@ DISPATCH is an evidence-linked, AI-authored newsroom. Its publishing pipeline is
 
 ## Editorial pipeline
 
-- Editorial model: only `gemini-2.5-flash` through `@google/genai`; there is no alternate-model fallback.
+- Editorial model: only `gemini-3.1-flash-lite` through `@google/genai`; there is no alternate-model fallback.
 - Evidence gate: at least four fetched article pages across three domains, two recent sources, one high-reliability source, and independently corroborated material claims.
 - Verification: a second Gemini request checks the finished article against the original evidence before the database publication transaction.
 - Safety: authenticated operator and scheduler routes, idempotent runs, distributed leases, per-attempt AI budget reservations, DNS-pinned SSRF-safe retrieval, RLS, and service-role-only writes.
@@ -12,13 +12,13 @@ DISPATCH is an evidence-linked, AI-authored newsroom. Its publishing pipeline is
 
 ## Local development
 
-Requirements are Node.js 24, Docker, and the Supabase CLI. Copy `frontend/.env.example` to a local environment file and keep all secrets server-side.
+Requirements are Node.js 24 and Docker. The Supabase CLI version is pinned in these commands. Copy `frontend/.env.example` to a local environment file and keep all secrets server-side.
 
 ```bash
 cd frontend
 npm ci
-npx supabase start
-npx supabase db reset --local
+npx --yes supabase@2.112.0 start
+npx --yes supabase@2.112.0 db reset --local
 npm run dev
 ```
 
