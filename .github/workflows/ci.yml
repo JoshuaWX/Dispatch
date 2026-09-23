@@ -45,7 +45,9 @@ jobs:
       - run: npm run test:db
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-      - run: npm run test:lighthouse
+      - run: npm run build
+      - run: node scripts/lighthouse.mjs
+        timeout-minutes: 15
       - if: always()
         run: npx --yes supabase@2.112.0 stop --no-backup
 

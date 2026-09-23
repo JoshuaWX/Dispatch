@@ -75,9 +75,11 @@ function median(values) {
 let chrome
 try {
   await waitForServer()
+  process.stdout.write('Lighthouse server ready.\n')
   const samples = []
   let lastLhr
   for (let run = 0; run < runs; run += 1) {
+    process.stdout.write(`Lighthouse run ${run + 1}/${runs} starting.\n`)
     const chromePort = await reservePort()
     chrome = await chromium.launch({
       headless: true,
@@ -85,14 +87,21 @@ try {
     })
     try {
       await waitForChrome(chromePort)
-      const result = await lighthouse(url, {
-        port: chromePort,
-        logLevel: 'error',
-        output: 'json',
-        onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-      }, desktopConfig)
+      let auditTimeout
+      const result = await Promise.race([
+        lighthouse(url, {
+          port: chromePort,
+          logLevel: 'error',
+          output: 'json',
+          onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
+        }, desktopConfig),
+        new Promise((_, reject) => {
+          auditTimeout = setTimeout(() => reject(new Error(`Lighthouse run ${run + 1} exceeded 120 seconds`)), 120_000)
+        }),
+      ]).finally(() => clearTimeout(auditTimeout))
       if (!result) throw new Error(`Lighthouse run ${run + 1} returned no result`)
       lastLhr = result.lhr
+      process.stdout.write(`Lighthouse run ${run + 1}/${runs} completed.\n`)
       samples.push({
         performance: result.lhr.categories.performance.score * 100,
         accessibility: result.lhr.categories.accessibility.score * 100,

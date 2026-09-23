@@ -3,8 +3,8 @@ import { GoogleGenAI } from '@google/genai'
 const model = process.env.GEMINI_MODEL?.trim()
 const apiKey = process.env.GEMINI_API_KEY?.trim()
 
-if (model !== 'gemini-3.6-flash') {
-  throw new Error('GEMINI_MODEL must be exactly gemini-3.6-flash')
+if (model !== 'gemini-3.1-flash-lite') {
+  throw new Error('GEMINI_MODEL must be exactly gemini-3.1-flash-lite')
 }
 if (!apiKey) throw new Error('GEMINI_API_KEY is required')
 
@@ -25,7 +25,7 @@ try {
     config: {
       abortSignal: controller.signal,
       temperature: 0,
-      maxOutputTokens: 128,
+      maxOutputTokens: 512,
       responseMimeType: 'application/json',
       responseJsonSchema: {
         type: 'object',
@@ -33,13 +33,16 @@ try {
         required: ['ok', 'model'],
         properties: {
           ok: { type: 'boolean' },
-          model: { type: 'string', enum: ['gemini-3.6-flash'] },
+          model: { type: 'string', enum: ['gemini-3.1-flash-lite'] },
         },
       },
-      thinkingConfig: { thinkingBudget: 128 },
+      thinkingConfig: { thinkingLevel: 'MEDIUM' },
     },
   })
 
+  if (response.candidates?.[0]?.finishReason !== 'STOP') {
+    throw new Error('Gemini smoke response was truncated')
+  }
   const parsed = JSON.parse(response.text ?? '')
   if (parsed.ok !== true || parsed.model !== model) {
     throw new Error('Gemini returned an invalid structured smoke response')

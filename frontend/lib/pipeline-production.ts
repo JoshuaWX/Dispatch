@@ -1,7 +1,7 @@
 import 'server-only'
 
 import { randomUUID } from 'node:crypto'
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, type ThinkingLevel } from '@google/genai'
 import { getDomain } from 'tldts'
 import type {
   ArticleDraft,
@@ -164,7 +164,7 @@ async function generateJson<T>(input: {
   prompt: string
   schema: unknown
   temperature: number
-  thinkingBudget: number
+  thinkingLevel: 'MEDIUM'
   maxOutputTokens: number
   maxInputTokens: number
   deadline: number
@@ -172,7 +172,7 @@ async function generateJson<T>(input: {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
   if (!apiKey) throw new Error('Gemini is unavailable')
   if ((process.env.GEMINI_MODEL?.trim() || GEMINI_MODEL) !== GEMINI_MODEL) {
-    throw new Error('Only gemini-3.6-flash is allowed')
+    throw new Error(`Only ${GEMINI_MODEL} is allowed`)
   }
   if (new Date() >= GEMINI_PRICE_REVIEW_AFTER) throw new Error('Gemini pricing metadata requires review')
 
@@ -217,7 +217,7 @@ async function generateJson<T>(input: {
           maxOutputTokens: input.maxOutputTokens,
           responseMimeType: 'application/json',
           responseJsonSchema: input.schema,
-          thinkingConfig: { thinkingBudget: input.thinkingBudget },
+          thinkingConfig: { thinkingLevel: input.thinkingLevel as ThinkingLevel },
         },
       })
       const finishReason = response.candidates?.[0]?.finishReason

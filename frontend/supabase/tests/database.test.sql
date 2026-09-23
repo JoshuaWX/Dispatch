@@ -91,16 +91,16 @@ select lives_ok(
     (select id from public.dispatch_ai_reservations
       where run_id = '00000000-0000-4000-8000-000000000001'
       order by created_at desc limit 1),
-    0.001875, 500, 400
+    0.000725, 500, 400
   )$$,
-  'budget settlement records a Gemini 3.6 Flash usage record'
+  'budget settlement records a Gemini 3.1 Flash-Lite usage record'
 );
 select is(
   (select model from public.dispatch_ai_usage
     where run_id = '00000000-0000-4000-8000-000000000001'
     order by created_at desc limit 1),
-  'gemini-3.6-flash',
-  'new AI usage is attributed to Gemini 3.6 Flash'
+  'gemini-3.1-flash-lite',
+  'new AI usage is attributed to Gemini 3.1 Flash-Lite'
 );
 
 select throws_ok(
