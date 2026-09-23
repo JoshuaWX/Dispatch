@@ -16,7 +16,7 @@ import { searchNewsData } from '@/lib/newsdata'
 import { searchTheNewsApi } from '@/lib/thenewsapi'
 import { getVirloTopics } from '@/lib/virlo'
 import { isLikelyArticleUrl, normalizeTopic } from '@/lib/news-provider-utils'
-import { fetchArticleSafely } from '@/lib/security/safe-fetch'
+import { fetchArticleSafely, SafeFetchError } from '@/lib/security/safe-fetch'
 import { getServiceSupabase } from '@/lib/supabase-server'
 import { ModelContentError, RetryableModelError, type PipelineDependencies } from '@/lib/pipeline'
 import {
@@ -266,7 +266,9 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
     return true
   })
 
-  const fetchedSources = await Promise.all(hits.slice(0, 14).map(async (hit) => {
+  const candidates = hits.slice(0, 14)
+  const failedHighSources: Array<{ domain: string; reason: string }> = []
+  const fetchedSources = await Promise.all(candidates.map(async (hit) => {
     try {
       const fetched = await fetchArticleSafely(hit.url)
       if (!isLikelyArticleUrl(fetched.url)) return null
@@ -282,12 +284,29 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
         excerpt,
         contentHash: fetched.contentHash,
       } satisfies ArticleSource
-    } catch {
+    } catch (error) {
       // A failed or unsafe retrieval is not evidence and is not counted.
+      if (reliabilityFor(hit.url) === 'high') {
+        const message = error instanceof SafeFetchError ? error.message : ''
+        const reason = error instanceof SafeFetchError && error.code === 'unsafe_source_url' ? 'unsafe_url'
+          : message.includes('size limit') ? 'oversized'
+            : message.includes('not an article') ? 'not_article'
+              : message.includes('returned ') ? 'http_error'
+                : message.includes('timed out') ? 'timeout' : 'other'
+        failedHighSources.push({ domain: domainFor(hit.url), reason })
+      }
       return null
     }
   }))
-  return fetchedSources.filter((source): source is ArticleSource => source !== null)
+  const fetched = fetchedSources.filter((source): source is ArticleSource => source !== null)
+  console.info('dispatch_source_collection', {
+    candidateCount: candidates.length,
+    fetchedCount: fetched.length,
+    highCandidateDomains: [...new Set(candidates.filter((hit) => reliabilityFor(hit.url) === 'high').map((hit) => domainFor(hit.url)))],
+    highFetchedCount: fetched.filter((source) => source.reliability === 'high').length,
+    failedHighSources,
+  })
+  return fetched
     .slice(0, MAX_RESEARCH_SOURCES)
     .map((source, index) => ({ ...source, id: `source-${index + 1}` }))
 }
