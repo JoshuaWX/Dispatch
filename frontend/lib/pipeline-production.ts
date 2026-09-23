@@ -107,6 +107,23 @@ function reliabilityFor(url: string): ArticleSource['reliability'] {
   return 'medium'
 }
 
+export function selectEvidenceCandidates(hits: NewsSearchHit[], limit: number): NewsSearchHit[] {
+  const ordered = [
+    ...hits.filter((hit) => reliabilityFor(hit.url) === 'high'),
+    ...hits.filter((hit) => reliabilityFor(hit.url) !== 'high'),
+  ]
+  const selected: NewsSearchHit[] = []
+  const countByDomain = new Map<string, number>()
+  for (const hit of ordered) {
+    const domain = domainFor(hit.url)
+    if (!domain || (countByDomain.get(domain) ?? 0) >= 3) continue
+    selected.push(hit)
+    countByDomain.set(domain, (countByDomain.get(domain) ?? 0) + 1)
+    if (selected.length >= limit) break
+  }
+  return selected
+}
+
 function cleanExcerpt(value: string) {
   return value.replace(/\s+/g, ' ').trim().slice(0, MAX_EXCERPT_CHARS)
 }
@@ -266,7 +283,7 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
     return true
   })
 
-  const candidates = hits.slice(0, 14)
+  const candidates = selectEvidenceCandidates(hits, 14)
   const failedHighSources: Array<{ domain: string; reason: string }> = []
   const fetchedSources = await Promise.all(candidates.map(async (hit) => {
     try {
@@ -300,6 +317,7 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
   }))
   const fetched = fetchedSources.filter((source): source is ArticleSource => source !== null)
   console.info('dispatch_source_collection', {
+    searchHitCount: hits.length,
     candidateCount: candidates.length,
     fetchedCount: fetched.length,
     highCandidateDomains: [...new Set(candidates.filter((hit) => reliabilityFor(hit.url) === 'high').map((hit) => domainFor(hit.url)))],

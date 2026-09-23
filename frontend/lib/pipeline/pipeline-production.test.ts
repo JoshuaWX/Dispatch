@@ -13,7 +13,7 @@ vi.mock('@google/genai', () => ({
 }))
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
-import { createProductionDependencies } from '@/lib/pipeline-production'
+import { createProductionDependencies, selectEvidenceCandidates } from '@/lib/pipeline-production'
 
 const topic = { topic: 'Verified material development', category: 'World' as const, score: 90 }
 const sources = [
@@ -132,5 +132,45 @@ describe('Gemini production adapter', () => {
     })
 
     await expect(createProductionDependencies().model.draft(topic, sources)).rejects.toBeInstanceOf(ModelContentError)
+  })
+})
+
+describe('evidence candidate selection', () => {
+  it('does not let early low-reliability hits crowd out later trusted publishers', () => {
+    const hits = Array.from({ length: 16 }, (_, index) => ({
+      title: `Candidate ${index}`,
+      source: 'Feed',
+      url: `https://publisher${index}.com/reports/verified-story-${index}`,
+      publishedAt: '2026-09-23T12:00:00.000Z',
+      excerpt: 'Publisher search hit.',
+    }))
+    hits.push({
+      title: 'Trusted candidate', source: 'The Guardian',
+      url: 'https://theguardian.com/world/2026/sep/23/verified-trusted-report',
+      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Trusted publisher search hit.',
+    })
+
+    const selected = selectEvidenceCandidates(hits, 14)
+
+    expect(selected).toHaveLength(14)
+    expect(selected.some((hit) => hit.source === 'The Guardian')).toBe(true)
+  })
+
+  it('limits candidates from one domain so independent publishers can be tried', () => {
+    const hits = Array.from({ length: 10 }, (_, index) => ({
+      title: `Same publisher ${index}`, source: 'Feed',
+      url: `https://feed.example.com/reports/verified-story-${index}`,
+      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Publisher search hit.',
+    }))
+    hits.push({
+      title: 'Other publisher', source: 'Other',
+      url: 'https://other.com/reports/independent-verified-story',
+      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Independent publisher search hit.',
+    })
+
+    const selected = selectEvidenceCandidates(hits, 14)
+
+    expect(selected.filter((hit) => hit.url.includes('feed.example.com'))).toHaveLength(3)
+    expect(selected.some((hit) => hit.url.includes('other.com'))).toBe(true)
   })
 })
