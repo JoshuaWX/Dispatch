@@ -13,14 +13,15 @@ import type {
   VerificationResult,
 } from '@/lib/dispatch-types'
 import { isLikelyArticleUrl } from '@/lib/news-provider-utils'
+import { GEMINI_DRAFT_LIMITS, GEMINI_VERIFICATION_LIMITS, maximumModelCostUsd } from '@/lib/gemini-pricing'
 
 const MIN_SOURCES = 4
 const MIN_DOMAINS = 3
 const MIN_RECENT_SOURCES = 2
 const MAX_SOURCE_AGE_MS = 72 * 60 * 60 * 1000
 const MAX_PUBLISHES_PER_DAY = 4
-const DRAFT_RESERVATION_USD = 0.01
-const VERIFICATION_RESERVATION_USD = 0.005
+const DRAFT_RESERVATION_USD = maximumModelCostUsd(GEMINI_DRAFT_LIMITS)
+const VERIFICATION_RESERVATION_USD = maximumModelCostUsd(GEMINI_VERIFICATION_LIMITS)
 
 export class ModelContentError extends Error {
   constructor(message: string) {

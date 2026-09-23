@@ -19,11 +19,15 @@ import { isLikelyArticleUrl, normalizeTopic } from '@/lib/news-provider-utils'
 import { fetchArticleSafely } from '@/lib/security/safe-fetch'
 import { getServiceSupabase } from '@/lib/supabase-server'
 import { ModelContentError, RetryableModelError, type PipelineDependencies } from '@/lib/pipeline'
+import {
+  GEMINI_DRAFT_LIMITS,
+  GEMINI_INPUT_USD_PER_MILLION,
+  GEMINI_MODEL,
+  GEMINI_OUTPUT_USD_PER_MILLION,
+  GEMINI_PRICE_REVIEW_AFTER,
+  GEMINI_VERIFICATION_LIMITS,
+} from '@/lib/gemini-pricing'
 
-const GEMINI_MODEL = 'gemini-3.6-flash'
-const PRICE_REVIEW_AFTER = new Date('2027-01-01T00:00:00.000Z')
-const INPUT_PRICE_PER_MILLION = 0.75
-const OUTPUT_PRICE_PER_MILLION = 3.75
 const MAX_RESEARCH_SOURCES = 7
 const MAX_EXCERPT_CHARS = 1_500
 const MAX_DRAFT_INPUT_CHARS = 40_000
@@ -141,7 +145,7 @@ function modelUsage(metadata: {
   return {
     inputTokens,
     outputTokens,
-    costUsd: (inputTokens * INPUT_PRICE_PER_MILLION + outputTokens * OUTPUT_PRICE_PER_MILLION) / 1_000_000,
+    costUsd: (inputTokens * GEMINI_INPUT_USD_PER_MILLION + outputTokens * GEMINI_OUTPUT_USD_PER_MILLION) / 1_000_000,
   }
 }
 
@@ -170,7 +174,7 @@ async function generateJson<T>(input: {
   if ((process.env.GEMINI_MODEL?.trim() || GEMINI_MODEL) !== GEMINI_MODEL) {
     throw new Error('Only gemini-3.6-flash is allowed')
   }
-  if (new Date() >= PRICE_REVIEW_AFTER) throw new Error('Gemini pricing metadata requires review')
+  if (new Date() >= GEMINI_PRICE_REVIEW_AFTER) throw new Error('Gemini pricing metadata requires review')
 
   const client = new GoogleGenAI({ apiKey })
   const countAbortController = new AbortController()
@@ -441,13 +445,11 @@ export function createProductionDependencies(): PipelineDependencies {
     model: {
       draft: async (topic, sources) => generateJson<ArticleDraft>({
         prompt: draftPrompt(topic, sources), schema: articleDraftJsonSchema,
-        temperature: 0.2, thinkingBudget: 1_024, maxInputTokens: 10_000,
-        maxOutputTokens: 2_800, deadline,
+        ...GEMINI_DRAFT_LIMITS, deadline,
       }),
       verify: async (topic, sources, draft) => generateJson<VerificationResult>({
         prompt: verificationPrompt(topic, sources, draft), schema: verificationJsonSchema,
-        temperature: 0, thinkingBudget: 512, maxInputTokens: 6_000,
-        maxOutputTokens: 1_200, deadline,
+        ...GEMINI_VERIFICATION_LIMITS, deadline,
       }),
     },
     repository,

@@ -184,8 +184,8 @@ describe('runPipeline', () => {
   it('reserves separately before draft and verification calls', async () => {
     const deps = dependencies()
     await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'two-reservations' })
-    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(1, expect.objectContaining({ amountUsd: 0.01 }))
-    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(2, expect.objectContaining({ amountUsd: 0.005 }))
+    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(1, expect.objectContaining({ amountUsd: 0.02 }))
+    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(2, expect.objectContaining({ amountUsd: 0.01 }))
   })
 
   it('settles successful reservations from provider usage metadata', async () => {
@@ -227,7 +227,7 @@ describe('runPipeline', () => {
     expect(deps.model.draft).toHaveBeenCalledTimes(2)
     expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
     expect(deps.repository.settleBudget).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: 'draft-attempt-1', actualUsd: 0.01,
+      reservationId: 'draft-attempt-1', actualUsd: 0.02,
     }))
   })
 
