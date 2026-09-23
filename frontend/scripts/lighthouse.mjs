@@ -158,6 +158,9 @@ try {
     process.stdout.write(`Lighthouse diagnostics: ${JSON.stringify({ serverResponse, lcpElement, lcpAudits, failedAudits, longTasks, mainThread, bootup, scripts })}\n`)
     throw new Error(`Lighthouse thresholds failed:\n${failures.join('\n')}`)
   }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  process.exitCode = 1
 } finally {
   if (chrome) await chrome.close()
   if (server.exitCode === null) {
@@ -168,3 +171,7 @@ try {
     }
   }
 }
+
+// Lighthouse can retain event-loop handles after closing Chromium. CI must
+// exit with the measured result rather than waiting indefinitely for them.
+process.exit(process.exitCode ?? 0)
