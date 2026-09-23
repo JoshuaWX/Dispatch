@@ -62,6 +62,21 @@ describe('safe article fetcher', () => {
     expect(dispatcher.close).toHaveBeenCalledOnce()
   })
 
+  it('accepts a large publisher page but extracts article text instead of navigation', async () => {
+    const article = 'Verified reporting with named sources and dated records. '.repeat(12)
+    const html = `<html><head><meta property="og:type" content="article"></head><body><nav>${'Menu '.repeat(75_000)}</nav><article><h1>Report</h1><p>${article}</p></article></body></html>`
+    expect(new TextEncoder().encode(html).length).toBeGreaterThan(256 * 1024)
+    const fetchArticle = createSafeArticleFetcher({
+      fetchImpl: vi.fn().mockResolvedValue(new Response(html, { headers: { 'content-type': 'text/html' } })),
+      lookup: async () => ['93.184.216.34'],
+      dispatcherFactory: () => ({ close: async () => undefined }) as never,
+    })
+
+    const result = await fetchArticle('https://publisher.test/reports/verified-large-article')
+    expect(result.text).toContain('Verified reporting with named sources')
+    expect(result.text).not.toContain('Menu')
+  })
+
   it('rejects unsupported response content types', async () => {
     const fetchArticle = createSafeArticleFetcher({
       fetchImpl: vi.fn().mockResolvedValue(new Response('binary', {

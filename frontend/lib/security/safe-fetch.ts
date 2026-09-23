@@ -112,6 +112,11 @@ function htmlToText(value: string) {
     .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/\s+/g, ' ').trim()
 }
 
+function articleText(raw: string) {
+  const article = raw.match(/<article\b[^>]*>[\s\S]*?<\/article>/i)?.[0]
+  return htmlToText(article ?? raw)
+}
+
 function isArticleDocument(raw: string, text: string, contentType: string) {
   if (contentType.startsWith('text/plain')) return text.length >= 800
   if (text.length < 300) return false
@@ -160,7 +165,7 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
   const lookup = options.lookup ?? defaultLookup
   const dispatcherFactory = options.dispatcherFactory ?? createPinnedDispatcher
   const timeoutMs = options.timeoutMs ?? 5_000
-  const maxBytes = options.maxBytes ?? 256 * 1024
+  const maxBytes = options.maxBytes ?? 1024 * 1024
   const maxRedirects = options.maxRedirects ?? 3
 
   return async function fetchArticle(sourceUrl: string) {
@@ -211,7 +216,7 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
           throw new SafeFetchError('source_fetch_failed', 'Source document exceeds the size limit')
         }
         const raw = await readBoundedBody(response, maxBytes, deadline)
-        const text = contentType.startsWith('text/plain') ? raw.replace(/\s+/g, ' ').trim() : htmlToText(raw)
+        const text = contentType.startsWith('text/plain') ? raw.replace(/\s+/g, ' ').trim() : articleText(raw)
         if (!isArticleDocument(raw, text, contentType)) {
           throw new SafeFetchError('source_fetch_failed', 'Source document is not an article page')
         }
