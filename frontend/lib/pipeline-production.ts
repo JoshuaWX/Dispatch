@@ -304,12 +304,7 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
     } catch (error) {
       // A failed or unsafe retrieval is not evidence and is not counted.
       if (reliabilityFor(hit.url) === 'high') {
-        const message = error instanceof SafeFetchError ? error.message : ''
-        const reason = error instanceof SafeFetchError && error.code === 'unsafe_source_url' ? 'unsafe_url'
-          : message.includes('size limit') ? 'oversized'
-            : message.includes('not an article') ? 'not_article'
-              : message.includes('returned ') ? 'http_error'
-                : message.includes('timed out') ? 'timeout' : 'other'
+        const reason = error instanceof SafeFetchError ? error.message : 'unclassified'
         failedHighSources.push({ domain: domainFor(hit.url), reason })
       }
       return null
@@ -319,6 +314,7 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
   console.info('dispatch_source_collection', {
     searchHitCount: hits.length,
     candidateCount: candidates.length,
+    candidateDomains: [...new Set(candidates.map((hit) => domainFor(hit.url)))],
     fetchedCount: fetched.length,
     highCandidateDomains: [...new Set(candidates.filter((hit) => reliabilityFor(hit.url) === 'high').map((hit) => domainFor(hit.url)))],
     highFetchedCount: fetched.filter((source) => source.reliability === 'high').length,
