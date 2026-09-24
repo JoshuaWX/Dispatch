@@ -23,8 +23,9 @@ The application is deliberately fail-closed. Production publishing stays disable
 
 ## 3. Paid Gemini smoke test
 
-1. Confirm the paid Google project can call the exact stable `gemini-3.1-flash-lite` endpoint with structured JSON and complete usage metadata. Current paid text rates are $0.25/M input and $1.50/M output tokens, including thinking; recheck official prices before release.
-   Do not begin this step or the 48-hour soak until the evidence-rights review above is complete and the allowed sources have demonstrated enough coverage to satisfy the publication gate.
+1. Confirm the paid Google project can call the exact `gemini-3.1-flash-lite` endpoint with structured JSON and complete usage metadata. Current paid text rates are $0.25/M input and $1.50/M output tokens, including thinking; recheck official prices before release.
+   A synthetic model-only smoke may run before source-rights approval if its maximum cost fits the shared budget margin and it sends no publisher content. Do not run an end-to-end staging smoke or the 48-hour soak until the evidence-rights review above is complete and allowed sources have demonstrated enough coverage to satisfy the publication gate.
+   On 2026-09-24, a **local-key-only** synthetic smoke passed: 13 input tokens, 235 output tokens including thinking, structured JSON and complete usage metadata. At the paid rates above its estimated charge is $0.000356. The billing tier, branch-scoped Vercel Preview key, and staging publication remain unverified; conservatively count this amount in the shared monthly budget.
 2. Perform a staging manual run with a unique `Idempotency-Key` and review its evidence, claim mappings, usage metadata, and rejection/publication result. Safe source-gate rejections spend no Gemini budget; investigate repeated rejections before the soak.
 3. If access, structured output, usage metadata, or the pricing review date fails, leave publishing paused. Do not configure another model.
 
