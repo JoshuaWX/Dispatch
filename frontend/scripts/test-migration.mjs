@@ -15,6 +15,11 @@ const hardeningMigration = readFileSync(
 )
 const fixture = `
 begin;
+-- This rollback-only upgrade harness runs against the latest local schema.
+-- Recreate the legacy public view before replaying its older definition:
+-- the latest schema appends story_kind, which otherwise shifts the view's
+-- computed columns and makes CREATE OR REPLACE VIEW reject the replay.
+drop view if exists public.dispatch_public_articles;
 drop schema if exists dispatch_backup cascade;
 insert into public.dispatch_articles(
   id, topic, headline, subheadline, lede, body, category, verification_status, publication_status
