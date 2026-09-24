@@ -23,10 +23,15 @@ export function ArticleReader({ article }: { article: PublishedArticle }) {
         <h1 className="mt-4">{article.headline}</h1>
         <p className="mt-5 text-xl leading-8 text-muted-foreground">{article.subheadline}</p>
         <div className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
-          <span>AI-authored; checked in a separate Gemini 2.5 Flash verification pass</span>
+          <span>AI-authored with Gemini 3.1 Flash-Lite; checked in a separate verification pass</span>
           <time dateTime={article.publishedAt}>{formatPublishedAt(article.publishedAt)}</time>
           <span>{article.readingTime} min read</span>
         </div>
+        <p className="mt-4 text-sm leading-6 text-muted-foreground">
+          {article.storyKind === 'official_announcement'
+            ? 'Official announcement: this brief attributes the stated facts to the issuing organisation. It is not independent confirmation of predicted outcomes.'
+            : 'Developing story: the central claims require independent source organisations and upstream evidence.'}
+        </p>
       </header>
 
       <div className="mt-10 grid gap-12 lg:grid-cols-[minmax(0,1fr)_22rem]">
@@ -70,15 +75,17 @@ export function ArticleReader({ article }: { article: PublishedArticle }) {
         </div>
 
         <aside aria-labelledby="evidence-heading" className="h-fit border border-border bg-card p-5 lg:sticky lg:top-24">
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">Verification passed · Grade A</p>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">Evidence checks passed · Grade A</p>
           <h2 id="evidence-heading" className="mt-3 text-2xl">Evidence</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">Short excerpts are retained for audit. Publisher pages open in a new tab.</p>
           <ol className="mt-5 space-y-5">
             {article.sources.map((source) => (
               <li id={`evidence-${source.id}`} key={source.id} className="scroll-mt-28 border-t border-border pt-4 first:border-0 first:pt-0">
-                <a href={source.url} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary underline-offset-4 hover:underline">{source.name}</a>
+                <a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center font-semibold text-primary underline-offset-4 hover:underline">{source.name}</a>
                 <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">{source.reliability} reliability · {formatPublishedAt(source.publishedAt)}</p>
                 <p className="mt-2 text-sm leading-6">{source.excerpt}</p>
+                {source.attribution && <p className="mt-3 text-sm leading-6 text-muted-foreground">{source.attribution}</p>}
+                {source.licenceUrl && <a href={source.licenceUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-primary underline underline-offset-4">Source reuse licence</a>}
               </li>
             ))}
           </ol>

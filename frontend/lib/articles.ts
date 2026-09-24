@@ -123,6 +123,11 @@ export async function getPublicArticle(id: string): Promise<PublishedArticle | n
     domain: row.source_domain,
     reliability: row.reliability, excerpt: row.excerpt,
     contentHash: row.content_hash, publishedAt: row.published_at,
+    organisationId: row.organisation_id, upstreamOriginId: row.upstream_origin_id,
+    isPrimary: row.is_primary, licenceId: row.licence_id, licenceUrl: row.licence_url,
+    licenceEvidence: row.licence_evidence, attribution: row.attribution,
+    discoveryUrl: row.discovery_url, retrievedAt: row.retrieved_at,
+    rightsCheckedAt: row.rights_checked_at, updatedAt: row.source_updated_at,
   }))
   const claims: MaterialClaim[] = (claimRows ?? []).map((row) => ({
     id: row.claim_id,
@@ -131,7 +136,8 @@ export async function getPublicArticle(id: string): Promise<PublishedArticle | n
   }))
 
   return {
-    id: data.id, topic: data.topic, headline: data.headline, subheadline: data.subheadline,
+    id: data.id, topic: data.topic, storyKind: data.story_kind,
+    headline: data.headline, subheadline: data.subheadline,
     lede: data.lede, body: data.body, category: data.category, tags: data.tags ?? [],
     sources, claims, readingTime: data.reading_time, publishedAt: data.published_at,
     qualityScore: data.quality_score, publicationStatus: data.publication_status,

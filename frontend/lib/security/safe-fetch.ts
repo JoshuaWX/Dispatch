@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns/promises'
+import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
+import { Readable } from 'node:stream'
 import ipaddr from 'ipaddr.js'
 import { getDomain } from 'tldts'
-import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici'
+import { Agent, type Dispatcher } from 'undici'
 
-const ALLOWED_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain']
+const CONTENT_TYPES = {
+  article: ['text/html', 'application/xhtml+xml', 'text/plain'],
+  feed: ['application/rss+xml', 'application/atom+xml', 'application/xml', 'text/xml'],
+  json: ['application/json'],
+} as const
 
 export class SafeFetchError extends Error {
-  constructor(public readonly code: 'unsafe_source_url' | 'source_fetch_failed', message: string) {
-    super(message)
+  constructor(public readonly code: 'unsafe_source_url' | 'source_fetch_failed', message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'SafeFetchError'
   }
 }
@@ -25,6 +31,7 @@ type SafeFetcherOptions = {
   timeoutMs?: number
   maxBytes?: number
   maxRedirects?: number
+  kind?: keyof typeof CONTENT_TYPES
 }
 
 function isUnsafeAddress(address: string) {
@@ -90,6 +97,8 @@ function createPinnedDispatcher(hostname: string, addresses: string[]) {
   const records = addresses.map((address) => ({ address, family: isIP(address) as 4 | 6 }))
   return new Agent({
     connect: {
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 250,
       lookup(requestedHostname, options, callback) {
         if (requestedHostname.toLowerCase().replace(/\.$/, '') !== expectedHostname) {
           const error = new Error('DNS lookup escaped the validated source host') as NodeJS.ErrnoException
@@ -107,6 +116,42 @@ function createPinnedDispatcher(hostname: string, addresses: string[]) {
   })
 }
 
+async function pinnedNativeFetch(url: URL, addresses: string[], signal: AbortSignal, headers: Record<string, string>) {
+  const expectedHost = url.hostname.toLowerCase().replace(/\.$/, '')
+  const records = addresses.map((address) => ({ address, family: isIP(address) as 4 | 6 }))
+  return new Promise<Response>((resolve, reject) => {
+    const request = httpsRequest(url, {
+      method: 'GET', headers, signal,
+      ...{ autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 250 },
+      lookup(requestedHost, options, callback) {
+        if (requestedHost.toLowerCase().replace(/\.$/, '') !== expectedHost) {
+          const error = new Error('DNS lookup escaped the validated source host') as NodeJS.ErrnoException
+          error.code = 'EACCES'
+          callback(error, '')
+          return
+        }
+        if (options.all) {
+          (callback as (error: NodeJS.ErrnoException | null, addresses: typeof records) => void)(null, records)
+          return
+        }
+        callback(null, records[0].address, records[0].family)
+      },
+    }, (incoming) => {
+      const responseHeaders = new Headers()
+      for (const [name, value] of Object.entries(incoming.headers)) {
+        if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : value)
+      }
+      const status = incoming.statusCode ?? 502
+      const hasBody = ![204, 205, 304].includes(status)
+      resolve(new Response(hasBody ? Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array> : null, {
+        status, headers: responseHeaders,
+      }))
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
 function htmlToText(value: string) {
   return value.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
@@ -118,7 +163,8 @@ function htmlToText(value: string) {
 
 function articleText(raw: string) {
   const article = raw.match(/<article\b[^>]*>[\s\S]*?<\/article>/i)?.[0]
-  return htmlToText(article ?? raw)
+  const main = raw.match(/<main\b[^>]*>[\s\S]*?<\/main>/i)?.[0]
+  return htmlToText(article ?? main ?? raw)
 }
 
 function isArticleDocument(raw: string, text: string, contentType: string) {
@@ -165,32 +211,32 @@ async function closeDispatcher(dispatcher: Dispatcher, deadline: number) {
 }
 
 export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
-  const fetchImpl = options.fetchImpl ?? (undiciFetch as unknown as FetchImpl)
+  const fetchImpl = options.fetchImpl
   const lookup = options.lookup ?? defaultLookup
   const dispatcherFactory = options.dispatcherFactory ?? createPinnedDispatcher
   const timeoutMs = options.timeoutMs ?? 5_000
   const maxBytes = options.maxBytes ?? 1024 * 1024
   const maxRedirects = options.maxRedirects ?? 3
+  const kind = options.kind ?? 'article'
 
   return async function fetchArticle(sourceUrl: string, allowedDomains?: ReadonlySet<string>) {
     const deadline = Date.now() + timeoutMs
     let current = await assertPublicHttpsUrl(sourceUrl, lookup, deadline, allowedDomains)
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
-      const dispatcher = dispatcherFactory(current.hostname, current.addresses)
+      const dispatcher = fetchImpl ? dispatcherFactory(current.hostname, current.addresses) : null
       let response: Response
       try {
-        response = await fetchImpl(current.url, {
-          method: 'GET', redirect: 'manual', cache: 'no-store',
-          headers: {
-            accept: 'text/html,application/xhtml+xml,text/plain;q=0.9',
-            'user-agent': 'DispatchEvidenceBot/1.0 (+https://dispatch-1news.vercel.app/methodology)',
-          },
-          signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-          dispatcher,
-        })
-      } catch {
-        await closeDispatcher(dispatcher, deadline)
-        throw new SafeFetchError('source_fetch_failed', 'Source request failed')
+        const headers = {
+          accept: kind === 'article' ? 'text/html,application/xhtml+xml,text/plain;q=0.9' : CONTENT_TYPES[kind].join(','),
+          'user-agent': 'DispatchEvidenceBot/1.0 (+https://dispatch-1news.vercel.app/methodology)',
+        }
+        const signal = AbortSignal.timeout(Math.max(1, deadline - Date.now()))
+        response = fetchImpl
+          ? await fetchImpl(current.url, { method: 'GET', redirect: 'manual', cache: 'no-store', headers, signal, dispatcher: dispatcher! })
+          : await pinnedNativeFetch(current.url, current.addresses, signal, headers)
+      } catch (error) {
+        if (dispatcher) await closeDispatcher(dispatcher, deadline)
+        throw new SafeFetchError('source_fetch_failed', 'Source request failed', { cause: error })
       }
 
       try {
@@ -210,7 +256,7 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
         }
 
         const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-        if (!ALLOWED_CONTENT_TYPES.some((allowed) => contentType.startsWith(allowed))) {
+        if (!CONTENT_TYPES[kind].some((allowed) => contentType.startsWith(allowed))) {
           await response.body?.cancel()
           throw new SafeFetchError('source_fetch_failed', 'Source content type is not supported')
         }
@@ -220,17 +266,20 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
           throw new SafeFetchError('source_fetch_failed', 'Source document exceeds the size limit')
         }
         const raw = await readBoundedBody(response, maxBytes, deadline)
-        const text = contentType.startsWith('text/plain') ? raw.replace(/\s+/g, ' ').trim() : articleText(raw)
-        if (!isArticleDocument(raw, text, contentType)) {
+        const text = kind === 'article'
+          ? contentType.startsWith('text/plain') ? raw.replace(/\s+/g, ' ').trim() : articleText(raw)
+          : raw
+        if (kind === 'article' && !isArticleDocument(raw, text, contentType)) {
           throw new SafeFetchError('source_fetch_failed', 'Source document is not an article page')
         }
         return {
           url: current.url.toString(),
           text: text.slice(0, 24_000),
+          raw,
           contentHash: createHash('sha256').update(text, 'utf8').digest('hex'),
         }
       } finally {
-        await closeDispatcher(dispatcher, deadline)
+        if (dispatcher) await closeDispatcher(dispatcher, deadline)
       }
     }
     throw new SafeFetchError('source_fetch_failed', 'Source request failed')
@@ -238,3 +287,5 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
 }
 
 export const fetchArticleSafely = createSafeArticleFetcher()
+export const fetchFeedSafely = createSafeArticleFetcher({ kind: 'feed', maxBytes: 256 * 1024, timeoutMs: 8_000 })
+export const fetchJsonSafely = createSafeArticleFetcher({ kind: 'json', maxBytes: 256 * 1024 })

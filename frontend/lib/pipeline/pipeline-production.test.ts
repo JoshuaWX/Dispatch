@@ -7,6 +7,7 @@ const gemini = vi.hoisted(() => ({
 const newsdata = vi.hoisted(() => ({ getTopics: vi.fn(), searchNewsData: vi.fn() }))
 const supabase = vi.hoisted(() => ({ getServiceSupabase: vi.fn() }))
 const researchProviders = vi.hoisted(() => ({ searchTheNewsApi: vi.fn(), fetchArticleSafely: vi.fn() }))
+const firstParty = vi.hoisted(() => ({ discover: vi.fn(), collect: vi.fn() }))
 
 vi.mock('server-only', () => ({}))
 vi.mock('@google/genai', () => ({
@@ -17,13 +18,14 @@ vi.mock('@google/genai', () => ({
 vi.mock('@/lib/newsdata', () => newsdata)
 vi.mock('@/lib/supabase-server', () => supabase)
 vi.mock('@/lib/thenewsapi', () => ({ searchTheNewsApi: researchProviders.searchTheNewsApi }))
+vi.mock('@/lib/first-party-sources', () => ({ createFirstPartySources: () => firstParty }))
 vi.mock('@/lib/security/safe-fetch', () => ({
   fetchArticleSafely: researchProviders.fetchArticleSafely,
   SafeFetchError: class SafeFetchError extends Error {},
 }))
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
-import { createProductionDependencies, selectEvidenceCandidates } from '@/lib/pipeline-production'
+import { createProductionDependencies } from '@/lib/pipeline-production'
 
 const topic = { topic: 'Verified material development', category: 'World' as const, score: 90 }
 const sources = [
@@ -66,6 +68,8 @@ describe('Gemini production adapter', () => {
     newsdata.searchNewsData.mockReset().mockResolvedValue([])
     researchProviders.searchTheNewsApi.mockReset().mockResolvedValue([])
     researchProviders.fetchArticleSafely.mockReset()
+    firstParty.discover.mockReset().mockResolvedValue([])
+    firstParty.collect.mockReset().mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -96,50 +100,59 @@ describe('Gemini production adapter', () => {
     expect(request.config).not.toHaveProperty('tools')
   })
 
-  it('discovers autonomous topics from NewsData without requiring NewsAPI or Virlo', async () => {
+  it('discovers first-party topics while excluding previously published source URLs', async () => {
+    const publishedUrl = 'https://www.gov.uk/government/news/already-published-official-story'
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [{ sources: [{ url: publishedUrl }] }], error: null }) }) }) }) }) }) }),
+    })
+    firstParty.discover.mockResolvedValue([{ topic: 'New agency announcement', category: 'World', score: 80, storyKind: 'official_announcement', sourceUrl: 'https://www.gov.uk/government/news/new-agency-announcement' }])
+    firstParty.collect.mockResolvedValue(sources)
+
     const selected = await createProductionDependencies().topics.next()
 
-    expect(selected).toMatchObject({ topic: 'Verified NewsData development' })
-    expect(newsdata.getTopics).toHaveBeenCalledOnce()
-  })
-
-  it('does not contact news providers or fetch publisher pages without approved AI-use rights', async () => {
-    vi.stubEnv('AI_EVIDENCE_LICENSED_DOMAINS', '')
-    researchProviders.searchTheNewsApi.mockResolvedValue([{
-      title: 'Publisher report', source: 'Publisher',
-      url: 'https://publisher.com/reports/verified-material-development',
-      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.',
-    }])
-
-    await expect(createProductionDependencies().research.collect(topic)).resolves.toEqual([])
+    expect(selected).toMatchObject({ topic: 'New agency announcement', storyKind: 'official_announcement' })
+    expect(firstParty.discover).toHaveBeenCalledWith(new Set([publishedUrl]))
+    expect(newsdata.getTopics).not.toHaveBeenCalled()
     expect(researchProviders.searchTheNewsApi).not.toHaveBeenCalled()
-    expect(newsdata.searchNewsData).not.toHaveBeenCalled()
-    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalled()
   })
 
-  it('fetches only allowlisted publisher evidence and rejects an unapproved final URL', async () => {
-    vi.stubEnv('AI_EVIDENCE_LICENSED_DOMAINS', 'publisher.com')
-    const licensedUrl = 'https://publisher.com/reports/verified-material-development'
-    const unlicensedUrl = 'https://unlicensed.com/reports/verified-material-development'
-    const redirectedUrl = 'https://publisher.com/reports/redirected-story'
-    researchProviders.searchTheNewsApi.mockResolvedValue([
-      { title: 'Licensed report', source: 'Publisher', url: licensedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
-      { title: 'Unlicensed report', source: 'Other', url: unlicensedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
-      { title: 'Redirecting report', source: 'Publisher', url: redirectedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
-    ])
-    researchProviders.fetchArticleSafely.mockImplementation(async (url: string) => ({
-      url: url === redirectedUrl ? unlicensedUrl : url,
-      text: 'Verified facts from a publisher article.',
-      contentHash: 'a'.repeat(64),
-    }))
+  it('skips rights-ineligible feed leads and reuses the selected evidence without a second fetch', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),
+    })
+    const rejected = { topic: 'Page without reusable rights', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/rights-unclear' }
+    const accepted = { topic: 'Agency releases new evidence', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/new-evidence' }
+    firstParty.discover.mockResolvedValue([rejected, accepted])
+    firstParty.collect.mockResolvedValueOnce([]).mockResolvedValueOnce(sources)
 
+    const dependencies = createProductionDependencies()
+    const selected = await dependencies.topics.next()
+    const collected = await dependencies.research.collect(selected!)
+
+    expect(selected).toEqual(accepted)
+    expect(collected).toBe(sources)
+    expect(firstParty.collect).toHaveBeenCalledTimes(2)
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
+  it('safely skips a feed containing no rights-cleared candidate', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),
+    })
+    firstParty.discover.mockResolvedValue([{ topic: 'Unclear source rights', category: 'World', score: 80, storyKind: 'official_announcement', sourceUrl: 'https://www.gov.uk/government/news/unclear-source-rights' }])
+
+    await expect(createProductionDependencies().topics.next()).resolves.toBeNull()
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
+  it('collects evidence only through the first-party rights-checked adapter', async () => {
+    firstParty.collect.mockResolvedValue(sources)
     const collected = await createProductionDependencies().research.collect(topic)
-
-    expect(collected).toHaveLength(1)
-    expect(collected[0]).toMatchObject({ id: 'source-1', url: licensedUrl, domain: 'publisher.com' })
-    expect(researchProviders.fetchArticleSafely).toHaveBeenCalledTimes(2)
-    expect(researchProviders.fetchArticleSafely).toHaveBeenCalledWith(licensedUrl, new Set(['publisher.com']))
-    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalledWith(unlicensedUrl, expect.anything())
+    expect(collected).toBe(sources)
+    expect(firstParty.collect).toHaveBeenCalledWith(topic)
+    expect(newsdata.searchNewsData).not.toHaveBeenCalled()
+    expect(researchProviders.searchTheNewsApi).not.toHaveBeenCalled()
+    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalled()
   })
 
   it('fails closed if the database budget cap exceeds the configured environment cap', async () => {
@@ -218,62 +231,5 @@ describe('Gemini production adapter', () => {
     })
 
     await expect(createProductionDependencies().model.draft(topic, sources)).rejects.toBeInstanceOf(ModelContentError)
-  })
-})
-
-describe('evidence candidate selection', () => {
-  it('prioritizes PBS NewsHour reporting without treating every PBS page as a news source', () => {
-    const hits = [
-      {
-        title: 'Unrelated PBS page', source: 'PBS',
-        url: 'https://www.pbs.org/station/verified-schedule-page',
-        publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Station schedule.',
-      },
-      {
-        title: 'PBS NewsHour report', source: 'PBS NewsHour',
-        url: 'https://www.pbs.org/newshour/world/verified-material-report',
-        publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Reported story.',
-      },
-    ]
-
-    expect(selectEvidenceCandidates(hits, 2)[0].source).toBe('PBS NewsHour')
-  })
-
-  it('does not let early low-reliability hits crowd out later trusted publishers', () => {
-    const hits = Array.from({ length: 16 }, (_, index) => ({
-      title: `Candidate ${index}`,
-      source: 'Feed',
-      url: `https://publisher${index}.com/reports/verified-story-${index}`,
-      publishedAt: '2026-09-23T12:00:00.000Z',
-      excerpt: 'Publisher search hit.',
-    }))
-    hits.push({
-      title: 'Trusted candidate', source: 'The Guardian',
-      url: 'https://theguardian.com/world/2026/sep/23/verified-trusted-report',
-      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Trusted publisher search hit.',
-    })
-
-    const selected = selectEvidenceCandidates(hits, 14)
-
-    expect(selected).toHaveLength(14)
-    expect(selected.some((hit) => hit.source === 'The Guardian')).toBe(true)
-  })
-
-  it('limits candidates from one domain so independent publishers can be tried', () => {
-    const hits = Array.from({ length: 10 }, (_, index) => ({
-      title: `Same publisher ${index}`, source: 'Feed',
-      url: `https://feed.example.com/reports/verified-story-${index}`,
-      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Publisher search hit.',
-    }))
-    hits.push({
-      title: 'Other publisher', source: 'Other',
-      url: 'https://other.com/reports/independent-verified-story',
-      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Independent publisher search hit.',
-    })
-
-    const selected = selectEvidenceCandidates(hits, 14)
-
-    expect(selected.filter((hit) => hit.url.includes('feed.example.com'))).toHaveLength(3)
-    expect(selected.some((hit) => hit.url.includes('other.com'))).toBe(true)
   })
 })
