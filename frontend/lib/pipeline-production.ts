@@ -101,6 +101,9 @@ function domainFor(url: string) {
 
 function reliabilityFor(url: string): ArticleSource['reliability'] {
   const domain = domainFor(url)
+  if (domain === 'pbs.org' && new URL(url).pathname.toLowerCase().startsWith('/newshour/')) {
+    return 'high'
+  }
   if ([...HIGH_RELIABILITY_DOMAINS].some((trusted) => domain === trusted || domain.endsWith(`.${trusted}`))) {
     return 'high'
   }

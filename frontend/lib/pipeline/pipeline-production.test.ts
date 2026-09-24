@@ -136,6 +136,23 @@ describe('Gemini production adapter', () => {
 })
 
 describe('evidence candidate selection', () => {
+  it('prioritizes PBS NewsHour reporting without treating every PBS page as a news source', () => {
+    const hits = [
+      {
+        title: 'Unrelated PBS page', source: 'PBS',
+        url: 'https://www.pbs.org/station/verified-schedule-page',
+        publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Station schedule.',
+      },
+      {
+        title: 'PBS NewsHour report', source: 'PBS NewsHour',
+        url: 'https://www.pbs.org/newshour/world/verified-material-report',
+        publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Reported story.',
+      },
+    ]
+
+    expect(selectEvidenceCandidates(hits, 2)[0].source).toBe('PBS NewsHour')
+  })
+
   it('does not let early low-reliability hits crowd out later trusted publishers', () => {
     const hits = Array.from({ length: 16 }, (_, index) => ({
       title: `Candidate ${index}`,
