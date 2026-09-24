@@ -4,6 +4,7 @@ const gemini = vi.hoisted(() => ({
   countTokens: vi.fn(),
   generateContent: vi.fn(),
 }))
+const newsdata = vi.hoisted(() => ({ getTopics: vi.fn(), searchNewsData: vi.fn() }))
 
 vi.mock('server-only', () => ({}))
 vi.mock('@google/genai', () => ({
@@ -11,6 +12,7 @@ vi.mock('@google/genai', () => ({
     models = gemini
   },
 }))
+vi.mock('@/lib/newsdata', () => newsdata)
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
 import { createProductionDependencies, selectEvidenceCandidates } from '@/lib/pipeline-production'
@@ -51,6 +53,8 @@ describe('Gemini production adapter', () => {
     vi.stubEnv('GEMINI_MODEL', 'gemini-3.1-flash-lite')
     gemini.countTokens.mockReset().mockResolvedValue({ totalTokens: 500 })
     gemini.generateContent.mockReset()
+    newsdata.getTopics.mockReset().mockResolvedValue(['Verified NewsData development'])
+    newsdata.searchNewsData.mockReset().mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -79,6 +83,13 @@ describe('Gemini production adapter', () => {
       },
     })
     expect(request.config).not.toHaveProperty('tools')
+  })
+
+  it('discovers autonomous topics from NewsData without requiring NewsAPI or Virlo', async () => {
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toMatchObject({ topic: 'Verified NewsData development' })
+    expect(newsdata.getTopics).toHaveBeenCalledOnce()
   })
 
   it('keeps publisher prompt injection inside an explicitly untrusted evidence envelope', async () => {

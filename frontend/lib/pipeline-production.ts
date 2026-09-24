@@ -11,10 +11,9 @@ import type {
   TrendTopic,
   VerificationResult,
 } from '@/lib/dispatch-types'
-import { getNewsApiTopics, searchNewsApi, type NewsSearchHit } from '@/lib/newsapi'
-import { searchNewsData } from '@/lib/newsdata'
+import type { NewsSearchHit } from '@/lib/newsapi'
+import { getTopics as getNewsDataTopics, searchNewsData } from '@/lib/newsdata'
 import { searchTheNewsApi } from '@/lib/thenewsapi'
-import { getVirloTopics } from '@/lib/virlo'
 import { isLikelyArticleUrl, normalizeTopic } from '@/lib/news-provider-utils'
 import { fetchArticleSafely, SafeFetchError } from '@/lib/security/safe-fetch'
 import { getServiceSupabase } from '@/lib/supabase-server'
@@ -275,7 +274,6 @@ function verificationPrompt(topic: TrendTopic, sources: ArticleSource[], draft: 
 async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
   const batches = await Promise.all([
     searchTheNewsApi(topic.topic),
-    searchNewsApi(topic.topic),
     searchNewsData(topic.topic),
   ])
   const seen = new Set<string>()
@@ -493,6 +491,5 @@ export function createProductionDependencies(): PipelineDependencies {
 }
 
 async function combinedTopics() {
-  const [virlo, news] = await Promise.all([getVirloTopics(), getNewsApiTopics()])
-  return [...new Set([...virlo, ...news].map(normalizeTopic).filter(Boolean))]
+  return [...new Set((await getNewsDataTopics()).map(normalizeTopic).filter(Boolean))]
 }
