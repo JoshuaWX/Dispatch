@@ -357,8 +357,14 @@ export function createProductionDependencies(): PipelineDependencies {
     },
     async getControl() {
       const db = getServiceSupabase()
-      const { data, error } = await db.from('dispatch_operator_settings').select('publishing_enabled').eq('id', true).single()
+      const { data, error } = await db.from('dispatch_operator_settings').select('publishing_enabled,monthly_budget_usd').eq('id', true).single()
       if (error || !data) throw new Error('Pipeline control unavailable')
+      const configuredBudget = Number(process.env.AI_MONTHLY_BUDGET_USD)
+      const databaseBudget = Number(data.monthly_budget_usd)
+      if (!Number.isFinite(configuredBudget) || configuredBudget <= 0 || configuredBudget > 1 ||
+          !Number.isFinite(databaseBudget) || databaseBudget <= 0 || databaseBudget > configuredBudget) {
+        throw new Error('Pipeline budget cap mismatch')
+      }
       return { publishingEnabled: data.publishing_enabled === true && process.env.PIPELINE_PUBLISHING_ENABLED === 'true' }
     },
     async reserveBudget(input) {

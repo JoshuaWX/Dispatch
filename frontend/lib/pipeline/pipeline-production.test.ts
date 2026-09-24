@@ -5,6 +5,7 @@ const gemini = vi.hoisted(() => ({
   generateContent: vi.fn(),
 }))
 const newsdata = vi.hoisted(() => ({ getTopics: vi.fn(), searchNewsData: vi.fn() }))
+const supabase = vi.hoisted(() => ({ getServiceSupabase: vi.fn() }))
 
 vi.mock('server-only', () => ({}))
 vi.mock('@google/genai', () => ({
@@ -13,6 +14,7 @@ vi.mock('@google/genai', () => ({
   },
 }))
 vi.mock('@/lib/newsdata', () => newsdata)
+vi.mock('@/lib/supabase-server', () => supabase)
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
 import { createProductionDependencies, selectEvidenceCandidates } from '@/lib/pipeline-production'
@@ -51,6 +53,7 @@ describe('Gemini production adapter', () => {
   beforeEach(() => {
     vi.stubEnv('GEMINI_API_KEY', 'test-gemini-key')
     vi.stubEnv('GEMINI_MODEL', 'gemini-3.1-flash-lite')
+    vi.stubEnv('AI_MONTHLY_BUDGET_USD', '0.19')
     gemini.countTokens.mockReset().mockResolvedValue({ totalTokens: 500 })
     gemini.generateContent.mockReset()
     newsdata.getTopics.mockReset().mockResolvedValue(['Verified NewsData development'])
@@ -90,6 +93,31 @@ describe('Gemini production adapter', () => {
 
     expect(selected).toMatchObject({ topic: 'Verified NewsData development' })
     expect(newsdata.getTopics).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed if the database budget cap exceeds the configured environment cap', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({
+          data: { publishing_enabled: true, monthly_budget_usd: '1.00' }, error: null,
+        }) }) }),
+      }),
+    })
+
+    await expect(createProductionDependencies().repository.getControl()).rejects.toThrow('budget')
+  })
+
+  it('allows a database cap at or below the configured cap', async () => {
+    vi.stubEnv('PIPELINE_PUBLISHING_ENABLED', 'true')
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({
+          data: { publishing_enabled: true, monthly_budget_usd: '0.19' }, error: null,
+        }) }) }),
+      }),
+    })
+
+    await expect(createProductionDependencies().repository.getControl()).resolves.toEqual({ publishingEnabled: true })
   })
 
   it('keeps publisher prompt injection inside an explicitly untrusted evidence envelope', async () => {
