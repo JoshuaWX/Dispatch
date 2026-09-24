@@ -3,6 +3,7 @@ import { normalizeForCompare, normalizeTopic } from '@/lib/news-provider-utils'
 
 const THE_NEWS_API_BASE_URL = 'https://api.thenewsapi.com/v1'
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
+const TRUSTED_SEARCH_DOMAINS = 'theguardian.com,bbc.com,bbc.co.uk,pbs.org,nature.com,who.int,un.org,gov.uk,europa.eu'
 
 type TheNewsApiSearchCache = Record<string, { results: NewsSearchHit[]; fetchedAt: number }>
 
@@ -30,22 +31,19 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
   }
 
   try {
-    const url = new URL(`${THE_NEWS_API_BASE_URL}/news/all`)
-    url.searchParams.set('api_token', apiToken)
-    url.searchParams.set('search', normalizedTopic)
-    url.searchParams.set('language', 'en')
-    url.searchParams.set('limit', '10')
-
-    const response = await fetch(url.toString(), {
-      next: { revalidate: 1800 },
-      signal: AbortSignal.timeout(5_000),
-    })
-
-    if (!response.ok) {
-      throw new Error(`TheNewsAPI search failed with status ${response.status}`)
-    }
-
-    const payload = (await response.json()) as {
+    const search = async (domains?: string) => {
+      const url = new URL(`${THE_NEWS_API_BASE_URL}/news/all`)
+      url.searchParams.set('api_token', apiToken)
+      url.searchParams.set('search', normalizedTopic)
+      url.searchParams.set('language', 'en')
+      url.searchParams.set('limit', '10')
+      if (domains) url.searchParams.set('domains', domains)
+      const response = await fetch(url.toString(), {
+        next: { revalidate: 1800 },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) throw new Error(`TheNewsAPI search failed with status ${response.status}`)
+      return (await response.json()) as {
       data?: Array<{
         title?: string
         description?: string
@@ -55,9 +53,13 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
         published_at?: string
       }>
     }
+    }
+
+    const responses = await Promise.allSettled([search(), search(TRUSTED_SEARCH_DOMAINS)])
+    const articles = responses.flatMap((response) => response.status === 'fulfilled' ? response.value.data ?? [] : [])
 
     const seenTitles = new Set<string>()
-    const results = (payload.data ?? [])
+    const results = articles
       .map((article) => {
         const title = normalizeTopic(article.title ?? '')
         const urlValue = article.url?.trim() || ''
