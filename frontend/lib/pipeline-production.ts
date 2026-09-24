@@ -98,6 +98,12 @@ function domainFor(url: string) {
   }
 }
 
+function licensedEvidenceDomains() {
+  return new Set((process.env.AI_EVIDENCE_LICENSED_DOMAINS ?? '').split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value && getDomain(value, { allowPrivateDomains: false }) === value))
+}
+
 function reliabilityFor(url: string): ArticleSource['reliability'] {
   const domain = domainFor(url)
   if (domain === 'pbs.org' && new URL(url).pathname.toLowerCase().startsWith('/newshour/')) {
@@ -272,14 +278,16 @@ function verificationPrompt(topic: TrendTopic, sources: ArticleSource[], draft: 
 }
 
 async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
+  const licensedDomains = licensedEvidenceDomains()
+  if (licensedDomains.size === 0) return []
   const batches = await Promise.all([
-    searchTheNewsApi(topic.topic),
+    searchTheNewsApi(topic.topic, licensedDomains),
     searchNewsData(topic.topic),
   ])
   const seen = new Set<string>()
   const hits = batches.flat().filter((hit) => {
     const url = hit.url.replace(/#.*$/, '').replace(/\/$/, '')
-    if (!url || !isLikelyArticleUrl(url) || seen.has(url)) return false
+    if (!url || !isLikelyArticleUrl(url) || !licensedDomains.has(domainFor(url)) || seen.has(url)) return false
     seen.add(url)
     return true
   })
@@ -288,8 +296,8 @@ async function collectSources(topic: TrendTopic): Promise<ArticleSource[]> {
   const failedHighSources: Array<{ domain: string; reason: string }> = []
   const fetchedSources = await Promise.all(candidates.map(async (hit) => {
     try {
-      const fetched = await fetchArticleSafely(hit.url)
-      if (!isLikelyArticleUrl(fetched.url)) return null
+      const fetched = await fetchArticleSafely(hit.url, licensedDomains)
+      if (!isLikelyArticleUrl(fetched.url) || !licensedDomains.has(domainFor(fetched.url))) return null
       const excerpt = cleanExcerpt(fetched.text)
       if (!excerpt) return null
       return {

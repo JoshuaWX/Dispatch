@@ -39,6 +39,20 @@ describe('safe article fetcher', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('does not follow a redirect outside the evidence rights allowlist', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, {
+      status: 302,
+      headers: { location: 'https://unlicensed.com/reports/continued-story' },
+    }))
+    const lookup = vi.fn().mockResolvedValue(['93.184.216.34'])
+    const fetchArticle = createSafeArticleFetcher({ fetchImpl, lookup })
+
+    await expect(fetchArticle('https://publisher.com/reports/story', new Set(['publisher.com'])))
+      .rejects.toMatchObject({ code: 'unsafe_source_url' })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(lookup).not.toHaveBeenCalledWith('unlicensed.com')
+  })
+
   it('returns a bounded text document from a public HTTPS source', async () => {
     const dispatcher = { close: vi.fn().mockResolvedValue(undefined) }
     const dispatcherFactory = vi.fn().mockReturnValue(dispatcher)

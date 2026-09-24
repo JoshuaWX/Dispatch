@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import ipaddr from 'ipaddr.js'
+import { getDomain } from 'tldts'
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici'
 
 const ALLOWED_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain']
@@ -55,7 +56,7 @@ async function withinDeadline<T>(promise: Promise<T>, deadline: number, message:
   }
 }
 
-async function assertPublicHttpsUrl(value: string, lookup: Lookup, deadline: number) {
+async function assertPublicHttpsUrl(value: string, lookup: Lookup, deadline: number, allowedDomains?: ReadonlySet<string>) {
   let url: URL
   try {
     url = new URL(value)
@@ -70,6 +71,9 @@ async function assertPublicHttpsUrl(value: string, lookup: Lookup, deadline: num
   const hostname = url.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '')
   if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')) {
     throw new SafeFetchError('unsafe_source_url', 'Source host is not public')
+  }
+  if (allowedDomains && !allowedDomains.has(getDomain(hostname, { allowPrivateDomains: false }) ?? '')) {
+    throw new SafeFetchError('unsafe_source_url', 'Source host is not approved for evidence use')
   }
 
   const addresses = isIP(hostname)
@@ -168,9 +172,9 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
   const maxBytes = options.maxBytes ?? 1024 * 1024
   const maxRedirects = options.maxRedirects ?? 3
 
-  return async function fetchArticle(sourceUrl: string) {
+  return async function fetchArticle(sourceUrl: string, allowedDomains?: ReadonlySet<string>) {
     const deadline = Date.now() + timeoutMs
-    let current = await assertPublicHttpsUrl(sourceUrl, lookup, deadline)
+    let current = await assertPublicHttpsUrl(sourceUrl, lookup, deadline, allowedDomains)
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
       const dispatcher = dispatcherFactory(current.hostname, current.addresses)
       let response: Response
@@ -197,7 +201,7 @@ export function createSafeArticleFetcher(options: SafeFetcherOptions = {}) {
             throw new SafeFetchError('source_fetch_failed', 'Source redirect could not be followed safely')
           }
           await response.body?.cancel()
-          current = await assertPublicHttpsUrl(new URL(location, current.url).toString(), lookup, deadline)
+          current = await assertPublicHttpsUrl(new URL(location, current.url).toString(), lookup, deadline, allowedDomains)
           continue
         }
         if (!response.ok) {

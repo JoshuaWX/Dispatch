@@ -6,6 +6,7 @@ const gemini = vi.hoisted(() => ({
 }))
 const newsdata = vi.hoisted(() => ({ getTopics: vi.fn(), searchNewsData: vi.fn() }))
 const supabase = vi.hoisted(() => ({ getServiceSupabase: vi.fn() }))
+const researchProviders = vi.hoisted(() => ({ searchTheNewsApi: vi.fn(), fetchArticleSafely: vi.fn() }))
 
 vi.mock('server-only', () => ({}))
 vi.mock('@google/genai', () => ({
@@ -15,6 +16,11 @@ vi.mock('@google/genai', () => ({
 }))
 vi.mock('@/lib/newsdata', () => newsdata)
 vi.mock('@/lib/supabase-server', () => supabase)
+vi.mock('@/lib/thenewsapi', () => ({ searchTheNewsApi: researchProviders.searchTheNewsApi }))
+vi.mock('@/lib/security/safe-fetch', () => ({
+  fetchArticleSafely: researchProviders.fetchArticleSafely,
+  SafeFetchError: class SafeFetchError extends Error {},
+}))
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
 import { createProductionDependencies, selectEvidenceCandidates } from '@/lib/pipeline-production'
@@ -58,6 +64,8 @@ describe('Gemini production adapter', () => {
     gemini.generateContent.mockReset()
     newsdata.getTopics.mockReset().mockResolvedValue(['Verified NewsData development'])
     newsdata.searchNewsData.mockReset().mockResolvedValue([])
+    researchProviders.searchTheNewsApi.mockReset().mockResolvedValue([])
+    researchProviders.fetchArticleSafely.mockReset()
   })
 
   afterEach(() => {
@@ -93,6 +101,45 @@ describe('Gemini production adapter', () => {
 
     expect(selected).toMatchObject({ topic: 'Verified NewsData development' })
     expect(newsdata.getTopics).toHaveBeenCalledOnce()
+  })
+
+  it('does not contact news providers or fetch publisher pages without approved AI-use rights', async () => {
+    vi.stubEnv('AI_EVIDENCE_LICENSED_DOMAINS', '')
+    researchProviders.searchTheNewsApi.mockResolvedValue([{
+      title: 'Publisher report', source: 'Publisher',
+      url: 'https://publisher.com/reports/verified-material-development',
+      publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.',
+    }])
+
+    await expect(createProductionDependencies().research.collect(topic)).resolves.toEqual([])
+    expect(researchProviders.searchTheNewsApi).not.toHaveBeenCalled()
+    expect(newsdata.searchNewsData).not.toHaveBeenCalled()
+    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalled()
+  })
+
+  it('fetches only allowlisted publisher evidence and rejects an unapproved final URL', async () => {
+    vi.stubEnv('AI_EVIDENCE_LICENSED_DOMAINS', 'publisher.com')
+    const licensedUrl = 'https://publisher.com/reports/verified-material-development'
+    const unlicensedUrl = 'https://unlicensed.com/reports/verified-material-development'
+    const redirectedUrl = 'https://publisher.com/reports/redirected-story'
+    researchProviders.searchTheNewsApi.mockResolvedValue([
+      { title: 'Licensed report', source: 'Publisher', url: licensedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
+      { title: 'Unlicensed report', source: 'Other', url: unlicensedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
+      { title: 'Redirecting report', source: 'Publisher', url: redirectedUrl, publishedAt: '2026-09-23T12:00:00.000Z', excerpt: 'Search snippet.' },
+    ])
+    researchProviders.fetchArticleSafely.mockImplementation(async (url: string) => ({
+      url: url === redirectedUrl ? unlicensedUrl : url,
+      text: 'Verified facts from a publisher article.',
+      contentHash: 'a'.repeat(64),
+    }))
+
+    const collected = await createProductionDependencies().research.collect(topic)
+
+    expect(collected).toHaveLength(1)
+    expect(collected[0]).toMatchObject({ id: 'source-1', url: licensedUrl, domain: 'publisher.com' })
+    expect(researchProviders.fetchArticleSafely).toHaveBeenCalledTimes(2)
+    expect(researchProviders.fetchArticleSafely).toHaveBeenCalledWith(licensedUrl, new Set(['publisher.com']))
+    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalledWith(unlicensedUrl, expect.anything())
   })
 
   it('fails closed if the database budget cap exceeds the configured environment cap', async () => {

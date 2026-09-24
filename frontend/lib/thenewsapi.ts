@@ -1,9 +1,9 @@
 import type { NewsSearchHit } from '@/lib/newsapi'
 import { normalizeForCompare, normalizeTopic } from '@/lib/news-provider-utils'
+import { getDomain } from 'tldts'
 
 const THE_NEWS_API_BASE_URL = 'https://api.thenewsapi.com/v1'
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
-const TRUSTED_SEARCH_DOMAINS = 'theguardian.com,bbc.com,bbc.co.uk,pbs.org,nature.com,who.int,un.org,gov.uk,europa.eu'
 
 type TheNewsApiSearchCache = Record<string, { results: NewsSearchHit[]; fetchedAt: number }>
 
@@ -11,11 +11,12 @@ const globalForTheNewsApi = globalThis as typeof globalThis & {
   __dispatchTheNewsApiSearchCache?: TheNewsApiSearchCache
 }
 
-export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> {
+export async function searchTheNewsApi(topic: string, approvedDomains: ReadonlySet<string>): Promise<NewsSearchHit[]> {
   const normalizedTopic = normalizeTopic(topic)
-  const cacheKey = normalizedTopic.toLowerCase()
+  const domains = [...approvedDomains].sort().join(',')
+  const cacheKey = `${normalizedTopic.toLowerCase()}|${domains}`
 
-  if (!cacheKey) {
+  if (!normalizedTopic || !domains) {
     return []
   }
 
@@ -31,19 +32,18 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
   }
 
   try {
-    const search = async (domains?: string) => {
-      const url = new URL(`${THE_NEWS_API_BASE_URL}/news/all`)
-      url.searchParams.set('api_token', apiToken)
-      url.searchParams.set('search', normalizedTopic)
-      url.searchParams.set('language', 'en')
-      url.searchParams.set('limit', '10')
-      if (domains) url.searchParams.set('domains', domains)
-      const response = await fetch(url.toString(), {
-        next: { revalidate: 1800 },
-        signal: AbortSignal.timeout(5_000),
-      })
-      if (!response.ok) throw new Error(`TheNewsAPI search failed with status ${response.status}`)
-      return (await response.json()) as {
+    const url = new URL(`${THE_NEWS_API_BASE_URL}/news/all`)
+    url.searchParams.set('api_token', apiToken)
+    url.searchParams.set('search', normalizedTopic)
+    url.searchParams.set('language', 'en')
+    url.searchParams.set('limit', '10')
+    url.searchParams.set('domains', domains)
+    const response = await fetch(url.toString(), {
+      next: { revalidate: 1800 },
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!response.ok) throw new Error(`TheNewsAPI search failed with status ${response.status}`)
+    const payload = (await response.json()) as {
       data?: Array<{
         title?: string
         description?: string
@@ -53,17 +53,13 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
         published_at?: string
       }>
     }
-    }
-
-    const responses = await Promise.allSettled([search(), search(TRUSTED_SEARCH_DOMAINS)])
-    const articles = responses.flatMap((response) => response.status === 'fulfilled' ? response.value.data ?? [] : [])
 
     const seenTitles = new Set<string>()
-    const results = articles
+    const results = (payload.data ?? [])
       .map((article) => {
         const title = normalizeTopic(article.title ?? '')
         const urlValue = article.url?.trim() || ''
-        if (!title || !urlValue) {
+        if (!title || !urlValue || !approvedDomains.has(getDomain(urlValue, { allowPrivateDomains: false }) ?? '')) {
           return null
         }
 

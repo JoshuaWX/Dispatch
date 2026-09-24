@@ -8,34 +8,35 @@ describe('TheNewsAPI publisher discovery', () => {
     ;(globalThis as typeof globalThis & { __dispatchTheNewsApiSearchCache?: unknown }).__dispatchTheNewsApiSearchCache = undefined
   })
 
-  it('merges a trusted-domain query with the general results', async () => {
+  it('queries only explicitly approved domains', async () => {
     vi.stubEnv('THENEWSAPI_KEY', 'test-token')
     const fetchMock = vi.fn(async (input: string) => {
-      const url = new URL(input)
-      const article = url.searchParams.has('domains')
-        ? { title: 'Trusted report', url: 'https://www.theguardian.com/world/2026/sep/23/trusted-report', source: 'The Guardian', published_at: '2026-09-23T12:00:00Z' }
-        : { title: 'General report', url: 'https://example.com/world/2026/sep/23/general-report', source: 'Example', published_at: '2026-09-23T12:00:00Z' }
+      expect(new URL(input).hostname).toBe('api.thenewsapi.com')
+      const article = { title: 'Approved report', url: 'https://publisher.com/world/2026/sep/23/report', source: 'Publisher', published_at: '2026-09-23T12:00:00Z' }
       return new Response(JSON.stringify({ data: [article] }), { headers: { 'content-type': 'application/json' } })
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const results = await searchTheNewsApi('Verified material development')
+    const results = await searchTheNewsApi('Verified material development', new Set(['publisher.com']))
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(fetchMock.mock.calls.some(([input]) => new URL(input).searchParams.get('domains')?.includes('theguardian.com'))).toBe(true)
-    expect(results.map((result) => result.source)).toEqual(['Example', 'The Guardian'])
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get('domains')).toBe('publisher.com')
+    expect(results.map((result) => result.source)).toEqual(['Publisher'])
   })
 
-  it('keeps general discovery available when the trusted query fails', async () => {
+  it('makes no request without approved domains', async () => {
     vi.stubEnv('THENEWSAPI_KEY', 'test-token')
-    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
-      if (new URL(input).searchParams.has('domains')) return new Response(null, { status: 429 })
-      return new Response(JSON.stringify({ data: [{
-        title: 'General report', url: 'https://example.com/world/2026/sep/23/general-report',
-        source: 'Example', published_at: '2026-09-23T12:00:00Z',
-      }] }))
-    }))
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
 
-    await expect(searchTheNewsApi('Another verified development')).resolves.toMatchObject([{ source: 'Example' }])
+    await expect(searchTheNewsApi('Verified material development', new Set())).resolves.toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the approved-domain query fails', async () => {
+    vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 429 })))
+
+    await expect(searchTheNewsApi('Another verified development', new Set(['publisher.com']))).resolves.toEqual([])
   })
 })
