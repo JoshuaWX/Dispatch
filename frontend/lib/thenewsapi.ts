@@ -12,6 +12,7 @@ const globalForTheNewsApi = globalThis as typeof globalThis & {
 }
 
 export async function searchTheNewsApi(topic: string, approvedDomains: ReadonlySet<string>): Promise<NewsSearchHit[]> {
+  if (process.env.THENEWSAPI_API_USE_APPROVED !== 'true') return []
   const normalizedTopic = normalizeTopic(topic)
   const domains = [...approvedDomains].sort().join(',')
   const cacheKey = `${normalizedTopic.toLowerCase()}|${domains}`

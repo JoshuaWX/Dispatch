@@ -10,6 +10,7 @@ describe('TheNewsAPI publisher discovery', () => {
 
   it('queries only explicitly approved domains', async () => {
     vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', 'true')
     const fetchMock = vi.fn(async (input: string) => {
       expect(new URL(input).hostname).toBe('api.thenewsapi.com')
       const article = { title: 'Approved report', url: 'https://publisher.com/world/2026/sep/23/report', source: 'Publisher', published_at: '2026-09-23T12:00:00Z' }
@@ -26,6 +27,7 @@ describe('TheNewsAPI publisher discovery', () => {
 
   it('makes no request without approved domains', async () => {
     vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', 'true')
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
@@ -35,8 +37,36 @@ describe('TheNewsAPI publisher discovery', () => {
 
   it('fails closed when the approved-domain query fails', async () => {
     vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', 'true')
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 429 })))
 
     await expect(searchTheNewsApi('Another verified development', new Set(['publisher.com']))).resolves.toEqual([])
+  })
+
+  it('makes no request when production API use is not approved', async () => {
+    vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', '')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(searchTheNewsApi('Verified material development', new Set(['publisher.com']))).resolves.toEqual([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not return cached search results after approval is withdrawn', async () => {
+    vi.stubEnv('THENEWSAPI_KEY', 'test-token')
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', 'true')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{
+      title: 'Approved report', url: 'https://publisher.com/world/2026/sep/23/report',
+      source: 'Publisher', published_at: '2026-09-23T12:00:00Z',
+    }] })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(searchTheNewsApi('Verified material development', new Set(['publisher.com'])))
+      .resolves.toHaveLength(1)
+    vi.stubEnv('THENEWSAPI_API_USE_APPROVED', 'false')
+    await expect(searchTheNewsApi('Verified material development', new Set(['publisher.com'])))
+      .resolves.toEqual([])
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 })
