@@ -232,6 +232,32 @@ describe('runPipeline', () => {
     expect(deps.repository.publishAndFinish).not.toHaveBeenCalled()
   })
 
+  it('retries valid JSON that fails the stricter Dispatch draft schema', async () => {
+    const deps = dependencies({
+      model: {
+        draft: vi.fn()
+          .mockResolvedValueOnce({ ...validDraft(), claims: [] })
+          .mockResolvedValueOnce(validDraft()),
+        verify: vi.fn().mockResolvedValue({
+          sourceDiversity: 9,
+          factualConfidence: 9,
+          overallScore: 8,
+          flags: [],
+          unsupportedClaims: [],
+          overstatement: false,
+          conflicts: false,
+        }),
+      },
+    })
+
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'schema-recovery' })
+
+    expect(result).toMatchObject({ status: 'published' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
+    expect(deps.repository.publishAndFinish).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['insufficient_source_diversity', [source('s1', 'reuters.com', 1, 'high'), source('s2', 'reuters.com', 2), source('s3', 'reuters.com', 3), { ...source('s4', 'apnews.com', 4), organisationId: 'reuters.com' }]],
     ['insufficient_recent_sources', [source('s1', 'reuters.com', 1, 'high'), source('s2', 'apnews.com', 80), source('s3', 'bbc.com', 90), source('s4', 'theguardian.com', 100)]],
