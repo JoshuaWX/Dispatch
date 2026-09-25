@@ -176,15 +176,33 @@ describe('runPipeline', () => {
   })
 
   it.each([
-    ['draft', 'invalid_model_output'],
-    ['verify', 'invalid_verification_output'],
-  ] as const)('rejects malformed %s content without publication', async (stage, reason) => {
+    ['draft'],
+    ['verify'],
+  ] as const)('retries malformed %s content once without bypassing publication gates', async (stage) => {
     const deps = dependencies({
       model: {
         draft: stage === 'draft'
-          ? vi.fn().mockRejectedValue(new ModelContentError('malformed JSON'))
+          ? vi.fn().mockRejectedValueOnce(new ModelContentError('malformed JSON')).mockResolvedValue(validDraft())
           : vi.fn().mockResolvedValue(validDraft()),
-        verify: vi.fn().mockRejectedValue(new ModelContentError('truncated output')),
+        verify: stage === 'verify'
+          ? vi.fn().mockRejectedValueOnce(new ModelContentError('malformed JSON')).mockResolvedValue({
+              sourceDiversity: 9,
+              factualConfidence: 9,
+              overallScore: 8,
+              flags: [],
+              unsupportedClaims: [],
+              overstatement: false,
+              conflicts: false,
+            })
+          : vi.fn().mockResolvedValue({
+              sourceDiversity: 9,
+              factualConfidence: 9,
+              overallScore: 8,
+              flags: [],
+              unsupportedClaims: [],
+              overstatement: false,
+              conflicts: false,
+            }),
       },
     })
 
@@ -192,7 +210,25 @@ describe('runPipeline', () => {
       trigger: 'manual', idempotencyKey: `invalid-${stage}`,
     })
 
-    expect(result).toMatchObject({ status: 'rejected', reason })
+    expect(result).toMatchObject({ status: 'published' })
+    expect(stage === 'draft' ? deps.model.draft : deps.model.verify).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
+    expect(deps.repository.publishAndFinish).toHaveBeenCalledOnce()
+  })
+
+  it('rejects malformed draft content after its bounded recovery attempt', async () => {
+    const deps = dependencies({
+      model: {
+        draft: vi.fn().mockRejectedValue(new ModelContentError('malformed JSON')),
+        verify: vi.fn(),
+      },
+    })
+
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'malformed-draft-twice' })
+
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid_model_output' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(2)
     expect(deps.repository.publishAndFinish).not.toHaveBeenCalled()
   })
 
@@ -294,15 +330,16 @@ describe('runPipeline', () => {
     }))
   })
 
-  it('does not retry malformed or truncated model content', async () => {
+  it('stops after one malformed-content recovery attempt', async () => {
     const deps = dependencies({
       model: { draft: vi.fn().mockRejectedValue(new ModelContentError('truncated')), verify: vi.fn() },
     })
 
-    await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'no-content-retry' })
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'bounded-content-retry' })
 
-    expect(deps.model.draft).toHaveBeenCalledOnce()
-    expect(deps.repository.reserveBudget).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid_model_output' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(2)
   })
 
   it('does not make a retry when the next worst-case reservation would exceed budget', async () => {

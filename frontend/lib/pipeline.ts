@@ -208,6 +208,7 @@ export function createPipeline(dependencies: PipelineDependencies) {
     monthKey: string
     dayKey: string
     call: () => Promise<ModelResponse<T>>
+    validate?: (value: T) => boolean
   }): Promise<
     | { status: 'ok'; response: { value: T; usage: ModelUsage } }
     | { status: 'budget_exhausted' | 'invalid_content' | 'unavailable' }
@@ -229,6 +230,14 @@ export function createPipeline(dependencies: PipelineDependencies) {
           inputTokens: response.usage.inputTokens,
           outputTokens: response.usage.outputTokens,
         })
+        // Gemini is asked for JSON Schema output, but a model response can still
+        // fail our stricter editorial schema. Give it one fresh, budget-reserved
+        // opportunity to produce valid structure; content still goes through all
+        // evidence and independent verification gates below.
+        if (input.validate && !input.validate(response.value)) {
+          if (attempt === 0) continue
+          return { status: 'invalid_content' }
+        }
         return { status: 'ok', response }
       } catch (error) {
         // Provider errors may not include usage, so settle the full reservation. This
@@ -239,7 +248,10 @@ export function createPipeline(dependencies: PipelineDependencies) {
           inputTokens: 0,
           outputTokens: 0,
         })
-        if (error instanceof ModelContentError) return { status: 'invalid_content' }
+        if (error instanceof ModelContentError) {
+          if (attempt === 0) continue
+          return { status: 'invalid_content' }
+        }
         if (!(error instanceof RetryableModelError) || attempt === 1) return { status: 'unavailable' }
       }
     }
@@ -281,6 +293,7 @@ export function createPipeline(dependencies: PipelineDependencies) {
         monthKey,
         dayKey,
         call: () => dependencies.model.draft(topic, sources),
+        validate: (value) => articleDraftSchema.safeParse(value).success,
       })
       if (drafted.status === 'budget_exhausted') {
         return finish({ status: 'skipped', runId: claim.runId, topic: topic.topic, reason: 'budget_exhausted' })
@@ -305,6 +318,7 @@ export function createPipeline(dependencies: PipelineDependencies) {
         monthKey,
         dayKey,
         call: () => dependencies.model.verify(topic, sources, draft),
+        validate: (value) => verificationSchema.safeParse(value).success,
       })
       if (verified.status === 'budget_exhausted') {
         return finish({ status: 'skipped', runId: claim.runId, topic: topic.topic, reason: 'budget_exhausted' })
