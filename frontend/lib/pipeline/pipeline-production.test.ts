@@ -161,6 +161,63 @@ describe('Gemini production adapter', () => {
     expect(gemini.generateContent).not.toHaveBeenCalled()
   })
 
+  it('gives a topic rejected once for malformed model output one later scheduled evaluation', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs'
+            ? [{ topic: 'Recoverable official update', rejection_reason: 'invalid_model_output' }]
+            : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const recoverable = { topic: 'Recoverable official update', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/recoverable-update' }
+    const later = { topic: 'Later agency announcement', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/later-agency-announcement' }
+    firstParty.discover.mockResolvedValue([recoverable, later])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(recoverable)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(recoverable)
+  })
+
+  it('moves past a topic after two malformed-output evaluations', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs'
+            ? [
+                { topic: 'Repeated malformed official update', rejection_reason: 'invalid_model_output' },
+                { topic: 'Repeated malformed official update', rejection_reason: 'invalid_verification_output' },
+              ]
+            : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const repeated = { topic: 'Repeated malformed official update', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/repeated-malformed-update' }
+    const later = { topic: 'Later agency announcement', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/later-agency-announcement' }
+    firstParty.discover.mockResolvedValue([repeated, later])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(later)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(later)
+  })
+
   it('safely skips a feed containing no rights-cleared candidate', async () => {
     supabase.getServiceSupabase.mockReturnValue({
       from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),

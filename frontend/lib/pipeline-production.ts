@@ -25,6 +25,11 @@ import {
 
 const MAX_DRAFT_INPUT_CHARS = 40_000
 const MAX_VERIFY_INPUT_CHARS = 24_000
+const TRANSIENT_MODEL_REJECTIONS = new Set([
+  'invalid_model_output',
+  'invalid_verification_output',
+])
+const MAX_TRANSIENT_TOPIC_EVALUATIONS = 2
 
 const articleDraftJsonSchema = {
   type: 'object',
@@ -389,20 +394,35 @@ export function createProductionDependencies(): PipelineDependencies {
                 typeof source.url === 'string' ? [source.url] : [])
             : []))
         const rejectedCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString()
-        const { data: rejectedRuns, error: rejectedError } = await db.from('dispatch_pipeline_runs').select('topic')
+        const { data: rejectedRuns, error: rejectedError } = await db.from('dispatch_pipeline_runs').select('topic,rejection_reason')
           .eq('status', 'rejected').eq('trigger', 'scheduled')
           .gte('started_at', rejectedCutoff).order('started_at', { ascending: false }).limit(100)
         if (rejectedError || !rejectedRuns) throw new Error('Rejected topic index unavailable')
-        const rejectedTopics = new Set(rejectedRuns.flatMap((run) =>
-          typeof run.topic === 'string' ? [normalizeTopic(run.topic).toLowerCase()] : []))
+        const rejectedTopics = new Map<string, { terminal: boolean; transientCount: number }>()
+        for (const run of rejectedRuns) {
+          if (typeof run.topic !== 'string') continue
+          const normalizedTopic = normalizeTopic(run.topic).toLowerCase()
+          const existing = rejectedTopics.get(normalizedTopic) ?? { terminal: false, transientCount: 0 }
+          if (typeof run.rejection_reason === 'string' && TRANSIENT_MODEL_REJECTIONS.has(run.rejection_reason)) {
+            existing.transientCount += 1
+          } else {
+            existing.terminal = true
+          }
+          rejectedTopics.set(normalizedTopic, existing)
+        }
         const candidates = await firstParty.discover(publishedUrls)
         const explicit = topicOverride ? normalizeTopic(topicOverride).toLowerCase() : ''
         // Feed entries are leads, not evidence. An ineligible first item must not
         // starve newer, rights-cleared stories on every subsequent Cron tick.
         const preflightDeadline = Math.min(deadline - 60_000, Date.now() + 25_000)
-        for (const candidate of candidates.filter((item) =>
-          (explicit ? item.topic.toLowerCase().includes(explicit) : !rejectedTopics.has(normalizeTopic(item.topic).toLowerCase()))
-        ).slice(0, 8)) {
+        for (const candidate of candidates.filter((item) => {
+          if (explicit) return item.topic.toLowerCase().includes(explicit)
+          const history = rejectedTopics.get(normalizeTopic(item.topic).toLowerCase())
+          // Evidence and verification failures remain terminal. A one-off JSON or
+          // schema failure gets one later scheduled evaluation, then makes room
+          // for newer eligible stories if it happens again.
+          return !history || (!history.terminal && history.transientCount < MAX_TRANSIENT_TOPIC_EVALUATIONS)
+        }).slice(0, 8)) {
           if (Date.now() >= preflightDeadline) break
           const evidence = await firstParty.collect(candidate)
           if (evidence.length === 0) continue
