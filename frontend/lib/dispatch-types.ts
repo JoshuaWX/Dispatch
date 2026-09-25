@@ -8,11 +8,15 @@ export type Reliability = 'high' | 'medium' | 'low'
 export type PipelineTrigger = 'scheduled' | 'manual'
 export type PipelineStage = 'trend-intake' | 'research' | 'writing' | 'quality-gate' | 'publish'
 export type PipelineStatus = 'idle' | 'running' | 'degraded' | 'paused'
+export type StoryKind = 'official_announcement' | 'developing'
+export type EvidenceLicence = 'OGL-3.0' | 'CC-BY-4.0' | 'US-PD'
 
 export interface TrendTopic {
   topic: string
   category: ArticleCategory
   score: number
+  storyKind?: StoryKind
+  sourceUrl?: string
 }
 
 export interface ArticleSource {
@@ -24,6 +28,17 @@ export interface ArticleSource {
   excerpt: string
   publishedAt: string
   contentHash: string
+  organisationId?: string
+  upstreamOriginId?: string
+  isPrimary?: boolean
+  licenceId?: EvidenceLicence
+  licenceUrl?: string
+  licenceEvidence?: string
+  attribution?: string
+  discoveryUrl?: string
+  retrievedAt?: string
+  rightsCheckedAt?: string
+  updatedAt?: string
 }
 
 export interface MaterialClaim {
@@ -71,6 +86,7 @@ export interface QualityScore {
 export interface PublishedArticle {
   id: string
   topic: string
+  storyKind?: StoryKind
   headline: string
   subheadline: string
   lede: string

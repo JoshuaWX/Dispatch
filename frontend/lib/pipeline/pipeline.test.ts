@@ -13,6 +13,31 @@ function source(id: string, domain: string, hoursAgo: number, reliability: 'high
     publishedAt: new Date(now.getTime() - hoursAgo * 3_600_000).toISOString(),
     reliability,
     contentHash: `hash-${id}`,
+    organisationId: domain,
+    upstreamOriginId: `origin-${id}`,
+    isPrimary: false,
+    licenceId: 'CC-BY-4.0' as const,
+    licenceUrl: 'https://creativecommons.org/licenses/by/4.0/',
+    licenceEvidence: 'This work is licensed under CC BY 4.0.',
+    attribution: `${domain}, CC BY 4.0`,
+    discoveryUrl: `https://${domain}/news/feed`,
+  }
+}
+
+function officialSource() {
+  return {
+    ...source('s1', 'gov.uk', 1, 'high'),
+    url: 'https://www.gov.uk/government/news/verified-official-announcement',
+    domain: 'www.gov.uk',
+    name: 'UK Government',
+    organisationId: 'uk-government:department-for-science-innovation-and-technology',
+    upstreamOriginId: 'https://www.gov.uk/government/news/verified-official-announcement',
+    isPrimary: true,
+    licenceId: 'OGL-3.0' as const,
+    licenceUrl: 'https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/',
+    licenceEvidence: 'All content is available under the Open Government Licence v3.0, except where otherwise stated.',
+    attribution: 'Contains public sector information licensed under the Open Government Licence v3.0.',
+    discoveryUrl: 'https://www.gov.uk/api/search.json',
   }
 }
 
@@ -73,6 +98,44 @@ function dependencies(overrides: Partial<PipelineDependencies> = {}): PipelineDe
 }
 
 describe('runPipeline', () => {
+  it('publishes a verified official announcement from one rights-cleared primary source', async () => {
+    const deps = dependencies({
+      topics: { next: vi.fn().mockResolvedValue({ topic: 'Verified official announcement', category: 'World', score: 90, storyKind: 'official_announcement' }) },
+      research: { collect: vi.fn().mockResolvedValue([officialSource()]) },
+      model: {
+        draft: vi.fn().mockResolvedValue({ ...validDraft(), claims: validDraft().claims.map((claim) => ({ ...claim, sourceIds: ['s1'] })) }),
+        verify: vi.fn().mockResolvedValue({ sourceDiversity: 0, factualConfidence: 9, overallScore: 8, flags: [], unsupportedClaims: [], overstatement: false, conflicts: false }),
+      },
+    })
+
+    const result = await createPipeline(deps).runPipeline({ trigger: 'scheduled', idempotencyKey: 'official-one-source' })
+
+    expect(result.status).toBe('published')
+    expect(deps.repository.publishAndFinish).toHaveBeenCalledWith(expect.objectContaining({
+      article: expect.objectContaining({ storyKind: 'official_announcement', sources: [expect.objectContaining({ licenceId: 'OGL-3.0' })] }),
+    }))
+  })
+
+  it('never contacts Gemini for an official page without explicit compatible rights', async () => {
+    const unlicensed = { ...officialSource(), licenceEvidence: '' }
+    const deps = dependencies({
+      topics: { next: vi.fn().mockResolvedValue({ topic: 'Official unlicensed item', category: 'World', score: 90, storyKind: 'official_announcement' }) },
+      research: { collect: vi.fn().mockResolvedValue([unlicensed]) },
+    })
+    const result = await createPipeline(deps).runPipeline({ trigger: 'scheduled', idempotencyKey: 'unlicensed-official' })
+    expect(result).toMatchObject({ status: 'rejected', reason: 'insufficient_sources' })
+    expect(deps.model.draft).not.toHaveBeenCalled()
+  })
+
+  it('does not mistake two organisations repeating one origin for independent corroboration', async () => {
+    const a = officialSource()
+    const b = { ...source('s2', 'ecdc.europa.eu', 1, 'high'), domain: 'europa.eu', upstreamOriginId: a.upstreamOriginId }
+    const deps = dependencies({ research: { collect: vi.fn().mockResolvedValue([a, b]) } })
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'shared-origin' })
+    expect(result).toMatchObject({ status: 'rejected', reason: 'insufficient_source_diversity' })
+    expect(deps.model.draft).not.toHaveBeenCalled()
+  })
+
   it('publishes through the pipeline interface only when every strict gate passes', async () => {
     const deps = dependencies()
     const pipeline = createPipeline(deps)
@@ -113,15 +176,33 @@ describe('runPipeline', () => {
   })
 
   it.each([
-    ['draft', 'invalid_model_output'],
-    ['verify', 'invalid_verification_output'],
-  ] as const)('rejects malformed %s content without publication', async (stage, reason) => {
+    ['draft'],
+    ['verify'],
+  ] as const)('retries malformed %s content once without bypassing publication gates', async (stage) => {
     const deps = dependencies({
       model: {
         draft: stage === 'draft'
-          ? vi.fn().mockRejectedValue(new ModelContentError('malformed JSON'))
+          ? vi.fn().mockRejectedValueOnce(new ModelContentError('malformed JSON')).mockResolvedValue(validDraft())
           : vi.fn().mockResolvedValue(validDraft()),
-        verify: vi.fn().mockRejectedValue(new ModelContentError('truncated output')),
+        verify: stage === 'verify'
+          ? vi.fn().mockRejectedValueOnce(new ModelContentError('malformed JSON')).mockResolvedValue({
+              sourceDiversity: 9,
+              factualConfidence: 9,
+              overallScore: 8,
+              flags: [],
+              unsupportedClaims: [],
+              overstatement: false,
+              conflicts: false,
+            })
+          : vi.fn().mockResolvedValue({
+              sourceDiversity: 9,
+              factualConfidence: 9,
+              overallScore: 8,
+              flags: [],
+              unsupportedClaims: [],
+              overstatement: false,
+              conflicts: false,
+            }),
       },
     })
 
@@ -129,12 +210,56 @@ describe('runPipeline', () => {
       trigger: 'manual', idempotencyKey: `invalid-${stage}`,
     })
 
-    expect(result).toMatchObject({ status: 'rejected', reason })
+    expect(result).toMatchObject({ status: 'published' })
+    expect(stage === 'draft' ? deps.model.draft : deps.model.verify).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
+    expect(deps.repository.publishAndFinish).toHaveBeenCalledOnce()
+  })
+
+  it('rejects malformed draft content after its bounded recovery attempt', async () => {
+    const deps = dependencies({
+      model: {
+        draft: vi.fn().mockRejectedValue(new ModelContentError('malformed JSON')),
+        verify: vi.fn(),
+      },
+    })
+
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'malformed-draft-twice' })
+
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid_model_output' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(2)
     expect(deps.repository.publishAndFinish).not.toHaveBeenCalled()
   })
 
+  it('retries valid JSON that fails the stricter Dispatch draft schema', async () => {
+    const deps = dependencies({
+      model: {
+        draft: vi.fn()
+          .mockResolvedValueOnce({ ...validDraft(), claims: [] })
+          .mockResolvedValueOnce(validDraft()),
+        verify: vi.fn().mockResolvedValue({
+          sourceDiversity: 9,
+          factualConfidence: 9,
+          overallScore: 8,
+          flags: [],
+          unsupportedClaims: [],
+          overstatement: false,
+          conflicts: false,
+        }),
+      },
+    })
+
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'schema-recovery' })
+
+    expect(result).toMatchObject({ status: 'published' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
+    expect(deps.repository.publishAndFinish).toHaveBeenCalledOnce()
+  })
+
   it.each([
-    ['insufficient_source_diversity', [source('s1', 'reuters.com', 1, 'high'), source('s2', 'reuters.com', 2), source('s3', 'reuters.com', 3), source('s4', 'apnews.com', 4)]],
+    ['insufficient_source_diversity', [source('s1', 'reuters.com', 1, 'high'), source('s2', 'reuters.com', 2), source('s3', 'reuters.com', 3), { ...source('s4', 'apnews.com', 4), organisationId: 'reuters.com' }]],
     ['insufficient_recent_sources', [source('s1', 'reuters.com', 1, 'high'), source('s2', 'apnews.com', 80), source('s3', 'bbc.com', 90), source('s4', 'theguardian.com', 100)]],
     ['missing_high_reliability_source', [source('s1', 'example.com', 1), source('s2', 'publisher.test', 2), source('s3', 'news.test', 3), source('s4', 'reports.test', 4)]],
   ])('rejects evidence condition %s', async (reason, sources) => {
@@ -185,7 +310,7 @@ describe('runPipeline', () => {
     const deps = dependencies()
     await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'two-reservations' })
     expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(1, expect.objectContaining({ amountUsd: 0.01 }))
-    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(2, expect.objectContaining({ amountUsd: 0.005 }))
+    expect(deps.repository.reserveBudget).toHaveBeenNthCalledWith(2, expect.objectContaining({ amountUsd: 0.01 }))
   })
 
   it('settles successful reservations from provider usage metadata', async () => {
@@ -227,19 +352,20 @@ describe('runPipeline', () => {
     expect(deps.model.draft).toHaveBeenCalledTimes(2)
     expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(3)
     expect(deps.repository.settleBudget).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: 'draft-attempt-1', actualUsd: 0.01,
+        reservationId: 'draft-attempt-1', actualUsd: 0.01,
     }))
   })
 
-  it('does not retry malformed or truncated model content', async () => {
+  it('stops after one malformed-content recovery attempt', async () => {
     const deps = dependencies({
       model: { draft: vi.fn().mockRejectedValue(new ModelContentError('truncated')), verify: vi.fn() },
     })
 
-    await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'no-content-retry' })
+    const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'bounded-content-retry' })
 
-    expect(deps.model.draft).toHaveBeenCalledOnce()
-    expect(deps.repository.reserveBudget).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid_model_output' })
+    expect(deps.model.draft).toHaveBeenCalledTimes(2)
+    expect(deps.repository.reserveBudget).toHaveBeenCalledTimes(2)
   })
 
   it('does not make a retry when the next worst-case reservation would exceed budget', async () => {
@@ -322,13 +448,14 @@ describe('runPipeline', () => {
     expect(deps.model.draft).not.toHaveBeenCalled()
   })
 
-  it('counts publisher independence by registrable domain rather than subdomain', async () => {
+  it('counts source organisations rather than hostnames', async () => {
     const subdomainSources = ['us.example.com', 'uk.example.com', 'news.example.com'].map((hostname, index) => ({
       ...source(`s${index + 1}`, hostname, 1, index === 0 ? 'high' : 'medium'),
       domain: 'example.com',
+      organisationId: 'shared-publisher',
     }))
     const deps = dependencies({
-      research: { collect: vi.fn().mockResolvedValue([...subdomainSources, source('s4', 'apnews.com', 2, 'high')]) },
+      research: { collect: vi.fn().mockResolvedValue([...subdomainSources, { ...source('s4', 'apnews.com', 2, 'high'), organisationId: 'shared-publisher' }]) },
     })
 
     const result = await createPipeline(deps).runPipeline({ trigger: 'manual', idempotencyKey: 'registrable-domain' })

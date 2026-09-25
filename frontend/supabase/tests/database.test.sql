@@ -1,6 +1,9 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(35);
+select plan(40);
+-- Production and staging have different persistent caps; the test transaction
+-- uses a one-dollar fixture and rolls it back with every inserted test row.
+update public.dispatch_operator_settings set monthly_budget_usd = 1.00 where id = true;
 
 select has_table('public', 'dispatch_articles', 'articles table exists');
 select has_table('public', 'dispatch_pipeline_runs', 'pipeline runs table exists');
@@ -50,7 +53,7 @@ select is(
 select is(
   (select monthly_budget_usd from public.dispatch_operator_settings where id = true),
   1.000000::numeric,
-  'monthly AI budget defaults to one dollar'
+  'the test transaction has a one-dollar AI budget fixture'
 );
 select is(
   (select budget_warning_usd from public.dispatch_operator_settings where id = true),
@@ -86,10 +89,26 @@ select is(
   'true',
   'budget can be reserved below the daily allowance'
 );
+select lives_ok(
+  $$select public.dispatch_settle_ai_budget(
+    (select id from public.dispatch_ai_reservations
+      where run_id = '00000000-0000-4000-8000-000000000001'
+      order by created_at desc limit 1),
+    0.000725, 500, 400
+  )$$,
+  'budget settlement records a Gemini 3.1 Flash-Lite usage record'
+);
+select is(
+  (select model from public.dispatch_ai_usage
+    where run_id = '00000000-0000-4000-8000-000000000001'
+    order by created_at desc limit 1),
+  'gemini-3.1-flash-lite',
+  'new AI usage is attributed to Gemini 3.1 Flash-Lite'
+);
 
 select throws_ok(
   $$select public.dispatch_publish_article(
-    '{"id":"00000000-0000-4000-8000-000000000100","pipelineRunId":"00000000-0000-4000-8000-000000000001","publicationStatus":"published","verificationStatus":"passed","grade":"A","qualityScore":{"overallScore":7,"factualConfidence":8,"sourceDiversity":7},"factCheckWarnings":[],"sources":[],"claims":[]}'::jsonb,
+    '{"id":"00000000-0000-4000-8000-000000000100","pipelineRunId":"00000000-0000-4000-8000-000000000001","storyKind":"official_announcement","publicationStatus":"published","verificationStatus":"passed","grade":"A","qualityScore":{"overallScore":7,"factualConfidence":8,"sourceDiversity":0},"factCheckWarnings":[],"sources":[],"claims":[]}'::jsonb,
     'test-idempotency', repeat('a', 64), current_date,
     '{"status":"published","runId":"00000000-0000-4000-8000-000000000001"}'::jsonb
   )$$,
@@ -98,32 +117,61 @@ select throws_ok(
   'publication RPC rejects incomplete evidence'
 );
 
+select throws_ok(
+  $$select public.dispatch_publish_article(
+    jsonb_build_object(
+      'id','unlicensed-article','pipelineRunId','00000000-0000-4000-8000-000000000001',
+      'storyKind','official_announcement','publicationStatus','published','verificationStatus','passed','grade','A',
+      'qualityScore',jsonb_build_object('overallScore',8,'factualConfidence',9,'sourceDiversity',0),
+      'factCheckWarnings','[]'::jsonb,
+      'sources',jsonb_build_array(jsonb_build_object(
+        'id','s1','url','https://www.gov.uk/government/news/unlicensed-test-story',
+        'publishedAt',now(),'organisationId','uk-government:test-agency',
+        'upstreamOriginId','https://www.gov.uk/government/news/unlicensed-test-story',
+        'attribution','Agency release.','discoveryUrl','https://www.gov.uk/search/news-and-communications.atom'
+      )),
+      'claims',jsonb_build_array('{}'::jsonb,'{}'::jsonb,'{}'::jsonb)
+    ),
+    'test-idempotency',repeat('e',64),current_date,
+    jsonb_build_object('status','published','runId','00000000-0000-4000-8000-000000000001')
+  )$$,
+  'P0001','article source rights or provenance incomplete',
+  'publication RPC rejects an official page without explicit licence evidence'
+);
+
 select lives_ok(
   $$select public.dispatch_publish_article(
     jsonb_build_object(
       'id', 'atomic-article',
       'pipelineRunId', '00000000-0000-4000-8000-000000000001',
+      'storyKind', 'official_announcement',
       'topic', 'Atomic publication test',
-      'headline', 'Independent reports confirm the atomic publication test',
-      'subheadline', 'Four publishers document the same material development.',
-      'lede', 'Independent publishers confirmed the material development.',
-      'body', 'The evidence package contains only supported facts from the stored sources.',
+      'headline', 'Agency announces the atomic publication test',
+      'subheadline', 'The official record describes the scope of the announcement.',
+      'lede', 'The agency announced a material development.',
+      'body', 'This brief attributes the announcement to the issuing agency and does not claim independent confirmation.',
       'category', 'World',
       'tags', jsonb_build_array('test'),
       'sources', jsonb_build_array(
-        jsonb_build_object('id','s1','name','Reuters','url','https://reuters.com/reports/atomic-test-story-one','domain','reuters.com','reliability','high','excerpt','Verified report one.','contentHash',repeat('a',64),'publishedAt',now()),
-        jsonb_build_object('id','s2','name','AP','url','https://apnews.com/reports/atomic-test-story-two','domain','apnews.com','reliability','high','excerpt','Verified report two.','contentHash',repeat('b',64),'publishedAt',now()),
-        jsonb_build_object('id','s3','name','BBC','url','https://bbc.com/reports/atomic-test-story-three','domain','bbc.com','reliability','medium','excerpt','Verified report three.','contentHash',repeat('c',64),'publishedAt',now()),
-        jsonb_build_object('id','s4','name','Guardian','url','https://theguardian.com/reports/atomic-test-story-four','domain','theguardian.com','reliability','medium','excerpt','Verified report four.','contentHash',repeat('d',64),'publishedAt',now())
+        jsonb_build_object(
+          'id','s1','name','UK Government',
+          'url','https://www.gov.uk/government/news/atomic-test-story-one','domain','www.gov.uk',
+          'reliability','high','excerpt','The agency announced the test.','contentHash',repeat('a',64),
+          'publishedAt',now(),'organisationId','uk-government:test-agency',
+          'upstreamOriginId','https://www.gov.uk/government/news/atomic-test-story-one','isPrimary',true,
+          'licenceId','OGL-3.0','licenceUrl','https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/',
+          'licenceEvidence','All content is available under OGL v3.0.','attribution','Contains public sector information licensed under OGL v3.0.',
+          'discoveryUrl','https://www.gov.uk/search/news-and-communications.atom'
+        )
       ),
       'claims', jsonb_build_array(
-        jsonb_build_object('id','c1','text','The material development was confirmed.','sourceIds',jsonb_build_array('s1','s2')),
+        jsonb_build_object('id','c1','text','The agency announced a material development.','sourceIds',jsonb_build_array('s1')),
         jsonb_build_object('id','c2','text','A public report was released.','sourceIds',jsonb_build_array('s1')),
-        jsonb_build_object('id','c3','text','Independent context was published.','sourceIds',jsonb_build_array('s3'))
+        jsonb_build_object('id','c3','text','The announcement identifies the issuing agency.','sourceIds',jsonb_build_array('s1'))
       ),
       'readingTime', 1,
       'publishedAt', now(),
-      'qualityScore', jsonb_build_object('overallScore',8,'factualConfidence',9,'sourceDiversity',9),
+      'qualityScore', jsonb_build_object('overallScore',8,'factualConfidence',9,'sourceDiversity',0),
       'publicationStatus', 'published',
       'verificationStatus', 'passed',
       'grade', 'A',
@@ -151,6 +199,11 @@ select is(
 );
 select is((select count(*)::integer from public.dispatch_public_articles), 1, 'atomic publication becomes public only after finalization');
 select is(
+  (select licence_id from public.dispatch_article_sources where article_id = 'atomic-article' and source_id = 's1'),
+  'OGL-3.0',
+  'source reuse licence is stored with published evidence'
+);
+select is(
   public.dispatch_increment_article_view('atomic-article', repeat('e', 64)),
   1::bigint,
   'the first client view is counted atomically'
@@ -170,11 +223,46 @@ select is(
 );
 select throws_ok(
   $$select public.dispatch_publish_article(
+    jsonb_build_object(
+      'id','shared-origin-article','pipelineRunId','00000000-0000-4000-8000-000000000003',
+      'storyKind','developing','topic','Shared origin test','headline','Two agencies repeat one measurement',
+      'subheadline','The pages refer to the same upstream release.','lede','Both agencies linked one measurement.',
+      'body','A developing story cannot count two pages repeating the same underlying measurement as independent confirmation.',
+      'category','World','tags',jsonb_build_array('test'),
+      'sources',jsonb_build_array(
+        (select sources->0 from public.dispatch_articles where id='atomic-article'),
+        (select (sources->0) || jsonb_build_object(
+          'id','s2','name','Another agency',
+          'url','https://www.gov.uk/government/news/another-page-about-the-same-release',
+          'organisationId','uk-government:another-agency'
+        ) from public.dispatch_articles where id='atomic-article')
+      ),
+      'claims',jsonb_build_array(
+        jsonb_build_object('id','c1','text','Both pages repeat one measurement.','sourceIds',jsonb_build_array('s1','s2')),
+        jsonb_build_object('id','c2','text','The original agency issued the release.','sourceIds',jsonb_build_array('s1')),
+        jsonb_build_object('id','c3','text','The second agency links the same release.','sourceIds',jsonb_build_array('s2'))
+      ),
+      'readingTime',1,'publishedAt',now(),
+      'qualityScore',jsonb_build_object('overallScore',8,'factualConfidence',9,'sourceDiversity',9),
+      'publicationStatus','published','verificationStatus','passed','grade','A','wordCount',12,
+      'whatWeDoNotKnow','Independent measurement is not yet available.',
+      'whatHappensNext','Review new independent data if published.',
+      'factCheckWarnings','[]'::jsonb,'format','brief','trendScore',42
+    ),
+    'rollback-idempotency',repeat('d',64),current_date,
+    jsonb_build_object('status','published','runId','00000000-0000-4000-8000-000000000003')
+  )$$,
+  'P0001','developing story lacks independent organisations or origins',
+  'two organisations repeating one upstream release do not establish independent corroboration'
+);
+select throws_ok(
+  $$select public.dispatch_publish_article(
     (
       select jsonb_build_object(
         'id', 'rolled-back-article',
         'pipelineRunId', '00000000-0000-4000-8000-000000000003',
         'topic', topic,
+        'storyKind', story_kind,
         'headline', headline,
         'subheadline', subheadline,
         'lede', lede,

@@ -1,5 +1,6 @@
 import type { NewsSearchHit } from '@/lib/newsapi'
 import { normalizeForCompare, normalizeTopic } from '@/lib/news-provider-utils'
+import { getDomain } from 'tldts'
 
 const THE_NEWS_API_BASE_URL = 'https://api.thenewsapi.com/v1'
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
@@ -10,11 +11,13 @@ const globalForTheNewsApi = globalThis as typeof globalThis & {
   __dispatchTheNewsApiSearchCache?: TheNewsApiSearchCache
 }
 
-export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> {
+export async function searchTheNewsApi(topic: string, approvedDomains: ReadonlySet<string>): Promise<NewsSearchHit[]> {
+  if (process.env.THENEWSAPI_API_USE_APPROVED !== 'true') return []
   const normalizedTopic = normalizeTopic(topic)
-  const cacheKey = normalizedTopic.toLowerCase()
+  const domains = [...approvedDomains].sort().join(',')
+  const cacheKey = `${normalizedTopic.toLowerCase()}|${domains}`
 
-  if (!cacheKey) {
+  if (!normalizedTopic || !domains) {
     return []
   }
 
@@ -35,16 +38,12 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
     url.searchParams.set('search', normalizedTopic)
     url.searchParams.set('language', 'en')
     url.searchParams.set('limit', '10')
-
+    url.searchParams.set('domains', domains)
     const response = await fetch(url.toString(), {
       next: { revalidate: 1800 },
       signal: AbortSignal.timeout(5_000),
     })
-
-    if (!response.ok) {
-      throw new Error(`TheNewsAPI search failed with status ${response.status}`)
-    }
-
+    if (!response.ok) throw new Error(`TheNewsAPI search failed with status ${response.status}`)
     const payload = (await response.json()) as {
       data?: Array<{
         title?: string
@@ -61,7 +60,7 @@ export async function searchTheNewsApi(topic: string): Promise<NewsSearchHit[]> 
       .map((article) => {
         const title = normalizeTopic(article.title ?? '')
         const urlValue = article.url?.trim() || ''
-        if (!title || !urlValue) {
+        if (!title || !urlValue || !approvedDomains.has(getDomain(urlValue, { allowPrivateDomains: false }) ?? '')) {
           return null
         }
 

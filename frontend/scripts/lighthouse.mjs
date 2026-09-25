@@ -75,9 +75,11 @@ function median(values) {
 let chrome
 try {
   await waitForServer()
+  process.stdout.write('Lighthouse server ready.\n')
   const samples = []
   let lastLhr
   for (let run = 0; run < runs; run += 1) {
+    process.stdout.write(`Lighthouse run ${run + 1}/${runs} starting.\n`)
     const chromePort = await reservePort()
     chrome = await chromium.launch({
       headless: true,
@@ -85,14 +87,21 @@ try {
     })
     try {
       await waitForChrome(chromePort)
-      const result = await lighthouse(url, {
-        port: chromePort,
-        logLevel: 'error',
-        output: 'json',
-        onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-      }, desktopConfig)
+      let auditTimeout
+      const result = await Promise.race([
+        lighthouse(url, {
+          port: chromePort,
+          logLevel: 'error',
+          output: 'json',
+          onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
+        }, desktopConfig),
+        new Promise((_, reject) => {
+          auditTimeout = setTimeout(() => reject(new Error(`Lighthouse run ${run + 1} exceeded 120 seconds`)), 120_000)
+        }),
+      ]).finally(() => clearTimeout(auditTimeout))
       if (!result) throw new Error(`Lighthouse run ${run + 1} returned no result`)
       lastLhr = result.lhr
+      process.stdout.write(`Lighthouse run ${run + 1}/${runs} completed.\n`)
       samples.push({
         performance: result.lhr.categories.performance.score * 100,
         accessibility: result.lhr.categories.accessibility.score * 100,
@@ -149,6 +158,9 @@ try {
     process.stdout.write(`Lighthouse diagnostics: ${JSON.stringify({ serverResponse, lcpElement, lcpAudits, failedAudits, longTasks, mainThread, bootup, scripts })}\n`)
     throw new Error(`Lighthouse thresholds failed:\n${failures.join('\n')}`)
   }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  process.exitCode = 1
 } finally {
   if (chrome) await chrome.close()
   if (server.exitCode === null) {
@@ -159,3 +171,7 @@ try {
     }
   }
 }
+
+// Lighthouse can retain event-loop handles after closing Chromium. CI must
+// exit with the measured result rather than waiting indefinitely for them.
+process.exit(process.exitCode ?? 0)

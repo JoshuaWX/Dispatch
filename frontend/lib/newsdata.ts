@@ -63,6 +63,7 @@ function cleanExcerpt(value: string, fallbackTitle: string) {
 }
 
 export async function getTopics(): Promise<string[]> {
+  if (process.env.NEWSDATA_API_USE_APPROVED !== 'true') return []
   const now = Date.now()
   const cache = globalForNewsData.__dispatchNewsDataCache
 
@@ -134,6 +135,7 @@ export async function getTopics(): Promise<string[]> {
 }
 
 export async function getTopicImageHint(topic: string): Promise<string | null> {
+  if (process.env.NEWSDATA_API_USE_APPROVED !== 'true') return null
   const normalized = normalizeTopic(topic).toLowerCase()
   if (!normalized) {
     return null
@@ -150,6 +152,7 @@ export async function getTopicImageHint(topic: string): Promise<string | null> {
 }
 
 export async function searchNewsData(topic: string): Promise<NewsSearchHit[]> {
+  if (process.env.NEWSDATA_API_USE_APPROVED !== 'true') return []
   const normalizedTopic = normalizeTopic(topic).toLowerCase()
   if (!normalizedTopic) {
     return []

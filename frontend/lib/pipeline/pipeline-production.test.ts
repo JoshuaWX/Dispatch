@@ -4,12 +4,24 @@ const gemini = vi.hoisted(() => ({
   countTokens: vi.fn(),
   generateContent: vi.fn(),
 }))
+const newsdata = vi.hoisted(() => ({ getTopics: vi.fn(), searchNewsData: vi.fn() }))
+const supabase = vi.hoisted(() => ({ getServiceSupabase: vi.fn() }))
+const researchProviders = vi.hoisted(() => ({ searchTheNewsApi: vi.fn(), fetchArticleSafely: vi.fn() }))
+const firstParty = vi.hoisted(() => ({ discover: vi.fn(), collect: vi.fn() }))
 
 vi.mock('server-only', () => ({}))
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
     models = gemini
   },
+}))
+vi.mock('@/lib/newsdata', () => newsdata)
+vi.mock('@/lib/supabase-server', () => supabase)
+vi.mock('@/lib/thenewsapi', () => ({ searchTheNewsApi: researchProviders.searchTheNewsApi }))
+vi.mock('@/lib/first-party-sources', () => ({ createFirstPartySources: () => firstParty }))
+vi.mock('@/lib/security/safe-fetch', () => ({
+  fetchArticleSafely: researchProviders.fetchArticleSafely,
+  SafeFetchError: class SafeFetchError extends Error {},
 }))
 
 import { ModelContentError, RetryableModelError } from '@/lib/pipeline'
@@ -48,9 +60,16 @@ const draft = {
 describe('Gemini production adapter', () => {
   beforeEach(() => {
     vi.stubEnv('GEMINI_API_KEY', 'test-gemini-key')
-    vi.stubEnv('GEMINI_MODEL', 'gemini-2.5-flash')
+    vi.stubEnv('GEMINI_MODEL', 'gemini-3.1-flash-lite')
+    vi.stubEnv('AI_MONTHLY_BUDGET_USD', '0.19')
     gemini.countTokens.mockReset().mockResolvedValue({ totalTokens: 500 })
     gemini.generateContent.mockReset()
+    newsdata.getTopics.mockReset().mockResolvedValue(['Verified NewsData development'])
+    newsdata.searchNewsData.mockReset().mockResolvedValue([])
+    researchProviders.searchTheNewsApi.mockReset().mockResolvedValue([])
+    researchProviders.fetchArticleSafely.mockReset()
+    firstParty.discover.mockReset().mockResolvedValue([])
+    firstParty.collect.mockReset().mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -58,7 +77,7 @@ describe('Gemini production adapter', () => {
     vi.unstubAllEnvs()
   })
 
-  it('uses only Gemini 2.5 Flash with the required drafting controls and records thinking usage', async () => {
+  it('uses only Gemini 3.1 Flash-Lite with bounded drafting and records thinking usage', async () => {
     gemini.generateContent.mockResolvedValue({
       text: JSON.stringify(draft),
       candidates: [{ finishReason: 'STOP' }],
@@ -67,18 +86,181 @@ describe('Gemini production adapter', () => {
 
     const result = await createProductionDependencies().model.draft(topic, sources)
 
-    expect(result).toMatchObject({ usage: { inputTokens: 500, outputTokens: 400, costUsd: 0.00115 } })
+    expect(result).toMatchObject({ usage: { inputTokens: 500, outputTokens: 400, costUsd: 0.000725 } })
     const request = gemini.generateContent.mock.calls[0][0]
     expect(request).toMatchObject({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-flash-lite',
       config: {
         temperature: 0.2,
         maxOutputTokens: 2800,
         responseMimeType: 'application/json',
-        thinkingConfig: { thinkingBudget: 1024 },
+        thinkingConfig: { thinkingLevel: 'MEDIUM' },
       },
     })
     expect(request.config).not.toHaveProperty('tools')
+  })
+
+  it('discovers first-party topics while excluding previously published source URLs', async () => {
+    const publishedUrl = 'https://www.gov.uk/government/news/already-published-official-story'
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [{ sources: [{ url: publishedUrl }] }], error: null }) }) }) }) }) }) }),
+    })
+    firstParty.discover.mockResolvedValue([{ topic: 'New agency announcement', category: 'World', score: 80, storyKind: 'official_announcement', sourceUrl: 'https://www.gov.uk/government/news/new-agency-announcement' }])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toMatchObject({ topic: 'New agency announcement', storyKind: 'official_announcement' })
+    expect(firstParty.discover).toHaveBeenCalledWith(new Set([publishedUrl]))
+    expect(newsdata.getTopics).not.toHaveBeenCalled()
+    expect(researchProviders.searchTheNewsApi).not.toHaveBeenCalled()
+  })
+
+  it('skips rights-ineligible feed leads and reuses the selected evidence without a second fetch', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),
+    })
+    const rejected = { topic: 'Page without reusable rights', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/rights-unclear' }
+    const accepted = { topic: 'Agency releases new evidence', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/new-evidence' }
+    firstParty.discover.mockResolvedValue([rejected, accepted])
+    firstParty.collect.mockResolvedValueOnce([]).mockResolvedValueOnce(sources)
+
+    const dependencies = createProductionDependencies()
+    const selected = await dependencies.topics.next()
+    const collected = await dependencies.research.collect(selected!)
+
+    expect(selected).toEqual(accepted)
+    expect(collected).toBe(sources)
+    expect(firstParty.collect).toHaveBeenCalledTimes(2)
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
+  it('moves past a recently rejected scheduled topic without another Gemini call', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs' ? [{ topic: 'Unsuitable official commentary' }] : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const rejected = { topic: 'Unsuitable official commentary', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/unsuitable-commentary' }
+    const accepted = { topic: 'Agency announces a new service', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/agency-new-service' }
+    firstParty.discover.mockResolvedValue([rejected, accepted])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(accepted)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(accepted)
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
+  it('gives a topic rejected once for malformed model output one later scheduled evaluation', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs'
+            ? [{ topic: 'Recoverable official update', rejection_reason: 'invalid_model_output' }]
+            : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const recoverable = { topic: 'Recoverable official update', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/recoverable-update' }
+    const later = { topic: 'Later agency announcement', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/later-agency-announcement' }
+    firstParty.discover.mockResolvedValue([recoverable, later])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(recoverable)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(recoverable)
+  })
+
+  it('moves past a topic after two malformed-output evaluations', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs'
+            ? [
+                { topic: 'Repeated malformed official update', rejection_reason: 'invalid_model_output' },
+                { topic: 'Repeated malformed official update', rejection_reason: 'invalid_verification_output' },
+              ]
+            : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const repeated = { topic: 'Repeated malformed official update', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/repeated-malformed-update' }
+    const later = { topic: 'Later agency announcement', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/later-agency-announcement' }
+    firstParty.discover.mockResolvedValue([repeated, later])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(later)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(later)
+  })
+
+  it('safely skips a feed containing no rights-cleared candidate', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),
+    })
+    firstParty.discover.mockResolvedValue([{ topic: 'Unclear source rights', category: 'World', score: 80, storyKind: 'official_announcement', sourceUrl: 'https://www.gov.uk/government/news/unclear-source-rights' }])
+
+    await expect(createProductionDependencies().topics.next()).resolves.toBeNull()
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
+  it('collects evidence only through the first-party rights-checked adapter', async () => {
+    firstParty.collect.mockResolvedValue(sources)
+    const collected = await createProductionDependencies().research.collect(topic)
+    expect(collected).toBe(sources)
+    expect(firstParty.collect).toHaveBeenCalledWith(topic)
+    expect(newsdata.searchNewsData).not.toHaveBeenCalled()
+    expect(researchProviders.searchTheNewsApi).not.toHaveBeenCalled()
+    expect(researchProviders.fetchArticleSafely).not.toHaveBeenCalled()
+  })
+
+  it('fails closed if the database budget cap exceeds the configured environment cap', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({
+          data: { publishing_enabled: true, monthly_budget_usd: '1.00' }, error: null,
+        }) }) }),
+      }),
+    })
+
+    await expect(createProductionDependencies().repository.getControl()).rejects.toThrow('budget')
+  })
+
+  it('allows a database cap at or below the configured cap', async () => {
+    vi.stubEnv('PIPELINE_PUBLISHING_ENABLED', 'true')
+    supabase.getServiceSupabase.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: async () => ({
+          data: { publishing_enabled: true, monthly_budget_usd: '0.19' }, error: null,
+        }) }) }),
+      }),
+    })
+
+    await expect(createProductionDependencies().repository.getControl()).resolves.toEqual({ publishingEnabled: true })
   })
 
   it('keeps publisher prompt injection inside an explicitly untrusted evidence envelope', async () => {

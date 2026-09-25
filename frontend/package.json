@@ -11,15 +11,17 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:db": "supabase test db && node scripts/test-migration.mjs",
+    "test:db": "npx --yes supabase@2.112.0 test db && node scripts/test-migration.mjs",
     "test:e2e": "playwright test",
     "test:lighthouse": "npm run build && node scripts/lighthouse.mjs",
+    "smoke:gemini": "node scripts/gemini-smoke.mjs",
     "audit": "npm audit --omit=dev --audit-level=high",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run audit"
   },
   "dependencies": {
     "@google/genai": "2.22.0",
     "@supabase/supabase-js": "^2.101.1",
+    "fast-xml-parser": "5.10.1",
     "ipaddr.js": "2.5.0",
     "next": "16.3.5",
     "react": "19.3.0",

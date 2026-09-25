@@ -39,6 +39,20 @@ describe('safe article fetcher', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('does not follow a redirect outside the evidence rights allowlist', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, {
+      status: 302,
+      headers: { location: 'https://unlicensed.com/reports/continued-story' },
+    }))
+    const lookup = vi.fn().mockResolvedValue(['93.184.216.34'])
+    const fetchArticle = createSafeArticleFetcher({ fetchImpl, lookup })
+
+    await expect(fetchArticle('https://publisher.com/reports/story', new Set(['publisher.com'])))
+      .rejects.toMatchObject({ code: 'unsafe_source_url' })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(lookup).not.toHaveBeenCalledWith('unlicensed.com')
+  })
+
   it('returns a bounded text document from a public HTTPS source', async () => {
     const dispatcher = { close: vi.fn().mockResolvedValue(undefined) }
     const dispatcherFactory = vi.fn().mockReturnValue(dispatcher)
@@ -60,6 +74,21 @@ describe('safe article fetcher', () => {
     expect(dispatcherFactory).toHaveBeenCalledWith('publisher.test', ['93.184.216.34'])
     expect(fetchImpl).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ dispatcher }))
     expect(dispatcher.close).toHaveBeenCalledOnce()
+  })
+
+  it('accepts a large publisher page but extracts article text instead of navigation', async () => {
+    const article = 'Verified reporting with named sources and dated records. '.repeat(12)
+    const html = `<html><head><meta property="og:type" content="article"></head><body><nav>${'Menu '.repeat(75_000)}</nav><article><h1>Report</h1><p>${article}</p></article></body></html>`
+    expect(new TextEncoder().encode(html).length).toBeGreaterThan(256 * 1024)
+    const fetchArticle = createSafeArticleFetcher({
+      fetchImpl: vi.fn().mockResolvedValue(new Response(html, { headers: { 'content-type': 'text/html' } })),
+      lookup: async () => ['93.184.216.34'],
+      dispatcherFactory: () => ({ close: async () => undefined }) as never,
+    })
+
+    const result = await fetchArticle('https://publisher.test/reports/verified-large-article')
+    expect(result.text).toContain('Verified reporting with named sources')
+    expect(result.text).not.toContain('Menu')
   })
 
   it('rejects unsupported response content types', async () => {
