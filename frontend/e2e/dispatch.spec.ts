@@ -43,7 +43,7 @@ test('URL-backed search, sort, and category filters work', async ({ page }) => {
 test('article renders evidence, authorship, metadata, and local assets', async ({ page }) => {
   await page.goto(`/article/${FIXTURE_ARTICLE_ID}`)
   await expect(page.getByRole('heading', { level: 1 })).toContainText('verification gate passes')
-  await expect(page.getByText(/AI-authored; checked in a separate/)).toBeVisible()
+  await expect(page.getByText(/AI-authored with Gemini 3\.1 Flash-Lite; checked in a separate verification pass/)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Material claims and evidence' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Evidence', exact: true })).toBeVisible()
   await expect(page.locator('#evidence-source-1').getByRole('link', { name: 'Reuters' }))

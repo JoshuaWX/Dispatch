@@ -135,6 +135,32 @@ describe('Gemini production adapter', () => {
     expect(gemini.generateContent).not.toHaveBeenCalled()
   })
 
+  it('moves past a recently rejected scheduled topic without another Gemini call', async () => {
+    supabase.getServiceSupabase.mockReturnValue({
+      from: (table: string) => {
+        const limit = async () => ({
+          data: table === 'dispatch_pipeline_runs' ? [{ topic: 'Unsuitable official commentary' }] : [],
+          error: null,
+        })
+        const order = () => ({ limit })
+        const gte = () => ({ order })
+        const eq = () => ({ eq, gte })
+        return { select: () => ({ eq }) }
+      },
+    })
+    const rejected = { topic: 'Unsuitable official commentary', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/unsuitable-commentary' }
+    const accepted = { topic: 'Agency announces a new service', category: 'World' as const, score: 80, storyKind: 'official_announcement' as const, sourceUrl: 'https://www.gov.uk/government/news/agency-new-service' }
+    firstParty.discover.mockResolvedValue([rejected, accepted])
+    firstParty.collect.mockResolvedValue(sources)
+
+    const selected = await createProductionDependencies().topics.next()
+
+    expect(selected).toEqual(accepted)
+    expect(firstParty.collect).toHaveBeenCalledOnce()
+    expect(firstParty.collect).toHaveBeenCalledWith(accepted)
+    expect(gemini.generateContent).not.toHaveBeenCalled()
+  })
+
   it('safely skips a feed containing no rights-cleared candidate', async () => {
     supabase.getServiceSupabase.mockReturnValue({
       from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ order: () => ({ limit: async () => ({ data: [], error: null }) }) }) }) }) }) }),

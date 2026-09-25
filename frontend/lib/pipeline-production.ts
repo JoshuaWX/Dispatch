@@ -388,12 +388,21 @@ export function createProductionDependencies(): PipelineDependencies {
             ? article.sources.flatMap((source) => source && typeof source === 'object' &&
                 typeof source.url === 'string' ? [source.url] : [])
             : []))
+        const rejectedCutoff = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString()
+        const { data: rejectedRuns, error: rejectedError } = await db.from('dispatch_pipeline_runs').select('topic')
+          .eq('status', 'rejected').eq('trigger', 'scheduled')
+          .gte('started_at', rejectedCutoff).order('started_at', { ascending: false }).limit(100)
+        if (rejectedError || !rejectedRuns) throw new Error('Rejected topic index unavailable')
+        const rejectedTopics = new Set(rejectedRuns.flatMap((run) =>
+          typeof run.topic === 'string' ? [normalizeTopic(run.topic).toLowerCase()] : []))
         const candidates = await firstParty.discover(publishedUrls)
         const explicit = topicOverride ? normalizeTopic(topicOverride).toLowerCase() : ''
         // Feed entries are leads, not evidence. An ineligible first item must not
         // starve newer, rights-cleared stories on every subsequent Cron tick.
         const preflightDeadline = Math.min(deadline - 60_000, Date.now() + 25_000)
-        for (const candidate of candidates.filter((item) => !explicit || item.topic.toLowerCase().includes(explicit)).slice(0, 8)) {
+        for (const candidate of candidates.filter((item) =>
+          (explicit ? item.topic.toLowerCase().includes(explicit) : !rejectedTopics.has(normalizeTopic(item.topic).toLowerCase()))
+        ).slice(0, 8)) {
           if (Date.now() >= preflightDeadline) break
           const evidence = await firstParty.collect(candidate)
           if (evidence.length === 0) continue
